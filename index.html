@@ -551,6 +551,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
    meta line below (template slug · timestamp · recipient). Locked design tokens; no new
    colors or fonts. */
 .comms-empty{font-size:13px;color:var(--grey2);padding:6px 0 18px;font-style:normal;}
+.comms-host{max-height:240px;overflow-y:auto;}
 .comms-item{padding:8px 0 14px;border-bottom:1px solid var(--rule);line-height:1.35;}
 .comms-item:last-child{border-bottom:none;}
 .comms-subject{font-size:14px;font-weight:400;color:var(--ink);}
@@ -996,7 +997,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
             <div class="sub-lbl sub-lbl-spaced">Istoric</div>
             <div id="va-hist"></div>
             <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
-            <div id="va-comms"></div>
+            <div class="comms-host" id="va-comms"></div>
             <div id="va-status-sel"></div>
             <div class="col-action" id="va-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
           </div>
@@ -1044,7 +1045,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
             <div class="sub-lbl sub-lbl-spaced">Istoric</div>
             <div id="vb-hist"></div>
             <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
-            <div id="vb-comms"></div>
+            <div class="comms-host" id="vb-comms"></div>
             <div id="vb-status-sel"></div>
             <div class="col-action" id="vb-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
           </div>
@@ -1099,7 +1100,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <div class="sub-lbl sub-lbl-spaced">Istoric</div>
       <div id="vc-hist"></div>
       <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
-      <div id="vc-comms"></div>
+      <div class="comms-host" id="vc-comms"></div>
       <div id="vc-status-sel"></div>
       <div class="col-action" id="vc-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
     </div>
@@ -2277,7 +2278,7 @@ const ACT_INFO={
 
 const TAGS={
   'nou':'<span class="tag tag-nou">Nou</span>',
-  'in-lucru':'<span class="tag tag-lucru">In-Lucru</span>',
+  'in-lucru':'<span class="tag tag-lucru">În Curs</span>',
   'programat':'<span class="tag tag-programat">Programat</span>',
   'finalizat':'<span class="tag tag-finalizat">Finalizat</span>'
 };
@@ -2425,7 +2426,7 @@ function renderDisc(disc,prefix,caseId){return '';}
 // and the locked transition gates. Phase 4b admin UI may still allow manual overrides for support.
 function statusSelHTML(prefix,status){
   var states=['nou','in-lucru','programat','finalizat'];
-  var labels=['Nou','In-Lucru','Programat','Finalizat'];
+  var labels=['Nou','În Curs','Programat','Finalizat'];
   var classes=['active-nou','active-lucru','active-prog','active-fin'];
   return '<div class="status-sel-wrap">'
     +'<span class="status-sel-lbl">Status dosar</span>'
@@ -3023,11 +3024,12 @@ function casePulseDot(c){
 // Shared row HTML for B and C
 function sharedRow(c,i,clickFn){
   // v54 (B11) — Status display matches RPC wire vocab uppercased per master prep
-  // contract: in_review→IN-LUCRU, booked→PROGRAMAT. Earlier off-by-one (in-lucru→Programat,
-  // programat→Gata) was the v53 bug master surfaced in retest gate 3.
+  // contract: in_review→ÎN CURS (was IN-LUCRU pre-v55 relabel), booked→PROGRAMAT.
+  // Earlier off-by-one (in-lucru→Programat, programat→Gata) was the v53 bug master
+  // surfaced in retest gate 3. v55: display label IN-LUCRU → ÎN CURS (one-line fit).
   var statusLabel = (
     c.status==='nou'         ? 'Nou' :
-    c.status==='in-lucru'    ? 'In-Lucru' :
+    c.status==='in-lucru'    ? 'În Curs' :
     c.status==='programat'   ? 'Programat' :
     c.status==='finalizat'   ? 'Finalizat' :
     c.status
@@ -3054,7 +3056,7 @@ function buildListA(cases){
       +'<div class="cc-client">'+c.client+'</div>'
       +'<div class="cc-status">'+(
         c.status==='nou'         ? 'nou' :
-        c.status==='in-lucru'    ? 'in-lucru' :
+        c.status==='in-lucru'    ? 'în curs' :
         c.status==='programat'   ? 'programat' :
         c.status==='finalizat'   ? 'finalizat' :
         c.status
