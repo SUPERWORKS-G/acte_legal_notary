@@ -553,7 +553,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
 .comms-empty{font-size:13px;color:var(--grey2);padding:6px 0 18px;font-style:normal;}
 .comms-item{padding:8px 0 14px;border-bottom:1px solid var(--rule);line-height:1.35;}
 .comms-item:last-child{border-bottom:none;}
-.comms-subject{font-size:14px;font-weight:400;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.comms-subject{font-size:14px;font-weight:400;color:var(--ink);}
 .comms-meta{font-family:var(--mono);font-size:11px;color:var(--grey2);letter-spacing:0.8px;margin-top:2px;text-transform:lowercase;}
 .comms-meta .comms-status-failed{color:var(--red);text-transform:uppercase;letter-spacing:0.8px;}
 
@@ -783,10 +783,47 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
 .btn-fin-modal-finalize:active{transform:scale(0.98);}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .ctrl-divider{width:1px;height:16px;background:var(--rule);flex-shrink:0;}
+/* Auth screen (B1, v54) — visual parity with admin v32 login. */
+.auth-screen{position:fixed;inset:0;background:var(--white);display:flex;align-items:center;justify-content:center;z-index:900;}
+.auth-screen.hidden{display:none;}
+.auth-box{width:360px;display:flex;flex-direction:column;gap:24px;}
+.auth-brand{display:flex;align-items:baseline;justify-content:space-between;width:100%;}
+.auth-title{font-family:var(--serif);font-size:24px;color:var(--ink);line-height:1;}
+.auth-form-group{display:flex;flex-direction:column;gap:8px;}
+.auth-form-lbl{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--grey2);}
+.auth-form-inp{font-family:var(--sans);font-size:14px;color:var(--ink);background:var(--white);border:none;border-bottom:1px solid var(--rule);padding:8px 0;outline:none;width:100%;transition:border-color .15s;}
+.auth-form-inp:focus{border-bottom-color:var(--ink);}
+.auth-err{font-family:var(--mono);font-size:11px;color:var(--red);letter-spacing:.5px;display:none;}
+.auth-err.show{display:block;}
+.auth-btn-primary{font-family:var(--sans);font-size:14px;color:var(--white);background:var(--ink);border:none;padding:12px 22px;cursor:pointer;transition:opacity .15s;}
+.auth-btn-primary:hover{opacity:.85;}
+.auth-btn-primary:disabled{opacity:.35;cursor:not-allowed;}
 </style>
 </head>
 <body>
-<div class="page">
+
+<!-- ══ AUTH SCREEN (B1, v54) ══ -->
+<!-- Renders before the dashboard if there's no Supabase session. On successful -->
+<!-- sign-in, hidden + boot proceeds. Visual parity with admin v32 login. -->
+<div class="auth-screen" id="auth-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-title">acte.legal</div>
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Email</span>
+      <input class="auth-form-inp" type="email" id="auth-email" placeholder="nume@birou-notarial.ro" autocomplete="email">
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Parolă</span>
+      <input class="auth-form-inp" type="password" id="auth-pass" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="auth-err" id="auth-err"></div>
+    <button class="auth-btn-primary" id="auth-btn">Intră în cont ⟶</button>
+  </div>
+</div>
+
+<div class="page" id="main-page" style="display:none;">
 
 <!-- ══ HEADER ══ -->
 <div class="header-strip">
@@ -865,7 +902,6 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
     <button class="vol-tab" onclick="setFilter('declaratii',this)">Declarații</button>
     <button class="vol-tab" onclick="setFilter('acorduri',this)">Acorduri</button>
     <button class="vol-tab" onclick="setFilter('legalizari',this)">Legalizări</button>
-    <button class="vol-tab" onclick="setFilter('imputerniciri',this)">Împuterniciri</button>
   </div>
 </div>
 <div id="vol-explorer" style="display:none;margin-top:20px;">
@@ -1198,20 +1234,71 @@ function callEdgeFunction(slug, body) {
   });
 }
 
-// Auth gate: if no session, redirect to a sign-in screen. For MVP we just block render
-// with a toast — production will route to a dedicated /login page (deferred per prep contract).
+// Auth screen helpers (B1, v54). Show the login form when there's no session;
+// hide it + reveal the main page when a session is present.
+function showAuthScreen() {
+  document.getElementById('auth-screen').classList.remove('hidden');
+  document.getElementById('main-page').style.display = 'none';
+}
+function showMainApp() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('main-page').style.display = '';
+}
+
+// Auth gate: if no session, surface the login screen and resolve to null. The
+// caller (bootLiveDashboard) bails out on null and the page stays on the auth
+// screen; a successful sign-in re-runs the boot path.
 function requireSession() {
   return sb.auth.getSession().then(function(res) {
     var session = res && res.data && res.data.session;
     if (!session) {
-      // No session — render disabled state. v52's existing toast surface tells the user.
-      // (Production swaps for a redirect to login.)
-      console.warn('[auth] no session — dashboard will not load live data');
+      console.warn('[auth] no session — showing login screen');
+      showAuthScreen();
       return null;
     }
+    showMainApp();
     return session;
   });
 }
+
+// Sign-in button + Enter-key handlers. ES5 + Promises (no async/await).
+document.getElementById('auth-btn').addEventListener('click', function() {
+  var email = document.getElementById('auth-email').value.trim();
+  var pass = document.getElementById('auth-pass').value;
+  var errEl = document.getElementById('auth-err');
+  var btn = document.getElementById('auth-btn');
+  errEl.classList.remove('show');
+  if (!email || !pass) {
+    errEl.textContent = 'Completează email și parola.';
+    errEl.classList.add('show');
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Se autentifică…';
+  sb.auth.signInWithPassword({ email: email, password: pass }).then(function(res) {
+    btn.disabled = false;
+    btn.textContent = 'Intră în cont ⟶';
+    if (res.error) {
+      errEl.textContent = res.error.message || 'Autentificare eșuată — reîncearcă.';
+      errEl.classList.add('show');
+      return;
+    }
+    // Session established — hide auth screen and re-run the boot path.
+    showMainApp();
+    if (typeof bootLiveDashboard === 'function') bootLiveDashboard();
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = 'Intră în cont ⟶';
+    errEl.textContent = (err && err.message) || 'Autentificare eșuată — reîncearcă.';
+    errEl.classList.add('show');
+  });
+});
+document.getElementById('auth-pass').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('auth-btn').click();
+});
+document.getElementById('auth-email').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('auth-pass').focus();
+});
 
 // Logout handler — wired to the Ieșire button on header strip.
 function signOutAndReload() {
@@ -1230,7 +1317,6 @@ function signOutAndReload() {
 var ROLES_BY_ACT = {
   procuri: ['Mandant', 'Mandatar'],
   declaratii: ['Declarant'],
-  imputerniciri: ['Mandant', 'Mandatar'],
   acorduri: ['Parte I', 'Parte II'],
   legalizari: ['Semnatar']
 };
@@ -1238,6 +1324,33 @@ var ROLES_BY_ACT = {
 // ══ ROLE CANONICAL ↔ DISPLAY (v50) — Batch 5.5 schema uses canonical lowercase keys (act_type_roles.role_key)
 // for storage; UI renders Romanian display labels. Phase 4b will source canonical keys from get_case_with_parties()
 // — until then, the seed uses display labels and the expander adds a parallel role_key for forward compatibility.
+// ══ ROLE LABELS (B6, v54) — UI dictionary mapping the wire-emitted machine slug
+// (from get_case_with_parties → case_parties.role) to the ALL-CAPS Romanian display
+// label rendered inside the party-role pill in the drawer. Path A per master:
+// no schema or RPC change; single consumer (notary dashboard) keeps it locally.
+// Slugs from act_type_roles seed; uppercase variants per v52 pill styling.
+// Fallback for unknown slugs: uppercase + underscores → spaces (e.g. noua_parte → NOUA PARTE).
+var ROLE_LABELS_RO = {
+  // procuri (2)
+  mandant:       'MANDANT',
+  mandatar:      'MANDATAR',
+  // declaratii (1)
+  declarant:     'DECLARANT',
+  // acorduri (2)
+  parte_i:       'PARTE I',
+  parte_ii:      'PARTE II',
+  // legalizari (1)
+  semnatar:      'SEMNATAR',
+  // imputerniciri (legacy — retired, kept for any leftover data)
+  imputernicit:  'ÎMPUTERNICIT'
+};
+function roleLabelRo(slug){
+  if(!slug) return '';
+  if(ROLE_LABELS_RO[slug]) return ROLE_LABELS_RO[slug];
+  // Defensive fallback: uppercase + replace underscores with spaces.
+  return String(slug).toUpperCase().replace(/_/g,' ');
+}
+
 var ROLE_DISPLAY_LABELS = {
   mandant:           'Mandant',
   mandatar:          'Mandatar',
@@ -1268,7 +1381,6 @@ function roleCanonical(canonicalOrDisplay){
 var MAINTYPE_LABEL = {
   procuri: 'Procură',
   declaratii: 'Declarație',
-  imputerniciri: 'Împuternicire',
   acorduri: 'Acord',
   legalizari: 'Legalizare'
 };
@@ -1887,7 +1999,10 @@ function rpcCaseToInMemory(row){
 // Each universal field becomes {l:label, v:value, m:mono?, cp:copyValue}.
 // Defensive sort by FIELD_REGISTRY in case the RPC doesn't return canonical order (N024 — open).
 function rpcPartyToInMemory(p){
-  var displayLabel = p.role_label || p.role_display || ROLE_DISPLAY_LABELS[p.role_key] || p.role_key || '';
+  // v54 (B6) — RPC emits machine slug in p.role (e.g. "semnatar"). Map to ALL-CAPS
+  // Romanian display via roleLabelRo(); fallback to uppercased slug for unknown roles.
+  var roleSlug = p.role || p.role_key || '';
+  var displayLabel = roleLabelRo(roleSlug);
   var fields = [];
   // Walk FIELD_REGISTRY in canonical order so the drawer renders fields in the locked order.
   // Each registry entry has a .fieldLabel and a corresponding column on case_parties.
@@ -1928,7 +2043,7 @@ function rpcPartyToInMemory(p){
   }
   return {
     role:     displayLabel,
-    role_key: p.role_key || '',
+    role_key: roleSlug,
     fields:   fields
   };
 }
@@ -2162,8 +2277,8 @@ const ACT_INFO={
 
 const TAGS={
   'nou':'<span class="tag tag-nou">Nou</span>',
-  'in-lucru':'<span class="tag tag-lucru">Programat</span>',
-  'programat':'<span class="tag tag-programat">Gata</span>',
+  'in-lucru':'<span class="tag tag-lucru">In-Lucru</span>',
+  'programat':'<span class="tag tag-programat">Programat</span>',
   'finalizat':'<span class="tag tag-finalizat">Finalizat</span>'
 };
 
@@ -2310,7 +2425,7 @@ function renderDisc(disc,prefix,caseId){return '';}
 // and the locked transition gates. Phase 4b admin UI may still allow manual overrides for support.
 function statusSelHTML(prefix,status){
   var states=['nou','in-lucru','programat','finalizat'];
-  var labels=['Nou','Programat','Gata','Finalizat'];
+  var labels=['Nou','In-Lucru','Programat','Finalizat'];
   var classes=['active-nou','active-lucru','active-prog','active-fin'];
   return '<div class="status-sel-wrap">'
     +'<span class="status-sel-lbl">Status dosar</span>'
@@ -2422,8 +2537,20 @@ function renderPrepSlot(prefix, c){
       + '</span>';
     return;
   }
-  // ENABLED state — status=in-lucru (PROGRAMAT label)
-  slot.innerHTML = '<button class="btn-prep" id="'+prefix+'-prep-btn" onclick="prepareAct()">Pregătește act ↓</button>';
+  // ENABLED state — status='in-lucru' (UI vocab) / 'in_review' (schema). Only state in
+  // which a fresh Pregătește act invocation is valid. Any other status (programat without
+  // prepared, finalizat without prepared, unknown) → render disabled with a status-aware
+  // tooltip. v54 (B7): tightens the fallthrough that previously left the button live on
+  // 'programat' cases lacking c.prepared — surfaced by master's gate-3 retest.
+  if(c.status === 'in-lucru'){
+    slot.innerHTML = '<button class="btn-prep" id="'+prefix+'-prep-btn" onclick="prepareAct()">Pregătește act ↓</button>';
+    return;
+  }
+  var tipFallback = 'Cazul nu este pregătit pentru generare.';
+  slot.innerHTML =
+    '<span class="btn-prep-wrap" data-tip="'+tipFallback+'">'
+    +   '<button class="btn-prep" id="'+prefix+'-prep-btn" disabled title="'+tipFallback+'" onclick="prepareAct()">Pregătește act ↓</button>'
+    + '</span>';
 }
 
 // Relative-time formatter for the success block
@@ -2747,8 +2874,8 @@ function populateView(prefix,c,preserveScroll){
     +'<div class="field-stacked" onclick="cp(\''+c.ref+'\',\'Număr dosar copiat\')">'
     +'<div class="field-stacked-inner"><span class="fs-lbl">Număr dosar</span><span class="fs-val mono">'+c.ref+'</span></div>'
     +'</div>'
-    +'<div class="field-stacked" onclick="cp(\''+c.act+'\',\'Tip act copiat\')">'
-    +'<div class="field-stacked-inner"><span class="fs-lbl">Tip act</span><span class="fs-val">'+c.act+'</span></div>'
+    +'<div class="field-stacked" onclick="cp(\''+(MAINTYPE_LABEL[c.type]||c.type||'')+'\',\'Tip act copiat\')">'
+    +'<div class="field-stacked-inner"><span class="fs-lbl">Tip act</span><span class="fs-val">'+(MAINTYPE_LABEL[c.type]||c.type||'')+'</span></div>'
     +'</div>'
     +'<div class="field-stacked" onclick="cp(\''+c.subtype+'\',\'Subtip copiat\')">'
     +'<div class="field-stacked-inner"><span class="fs-lbl">Subtip</span><span class="fs-val">'+c.subtype+'</span></div>'
@@ -2827,8 +2954,13 @@ function populateView(prefix,c,preserveScroll){
       confEl.innerHTML = '<div class="confirm-readout-empty">Neconfirmată</div>';
     }
   }
-  document.getElementById(prefix+'-date').value=c.date;
-  document.getElementById(prefix+'-time').value=c.time;
+  // v54 (B9) — Pre-fill picker. Priority: committed booked datetime (c.date/c.time) →
+  // client's preferred_at (c.prefDate + lower bound of c.prefInterval) → leave empty.
+  // Lets notary one-click Confirmă for cases where they accept the client's preference.
+  var prefillDate = c.date || c.prefDate || '';
+  var prefillTime = c.time || parsePrefIntervalStart(c.prefInterval) || '';
+  document.getElementById(prefix+'-date').value=prefillDate;
+  document.getElementById(prefix+'-time').value=prefillTime;
   if(document.getElementById(prefix+'-notes'))document.getElementById(prefix+'-notes').value=c.notes;
   document.getElementById(prefix+'-hist').innerHTML=c.hist.map(function(h){return '<div class="hist-item">'+h+'</div>';}).join('');
   // ══ Comms panel — read-only sent-email log. Loaded async via get_case_email_log.
@@ -2890,13 +3022,13 @@ function casePulseDot(c){
 
 // Shared row HTML for B and C
 function sharedRow(c,i,clickFn){
-  // v50 Bucket B status refactor: 4 visible labels (Nou / Programat / Pregătit / Finalizat)
-  // Mock keys (nou / in-lucru / programat / finalizat) preserved for code stability;
-  // only the user-facing labels changed.
+  // v54 (B11) — Status display matches RPC wire vocab uppercased per master prep
+  // contract: in_review→IN-LUCRU, booked→PROGRAMAT. Earlier off-by-one (in-lucru→Programat,
+  // programat→Gata) was the v53 bug master surfaced in retest gate 3.
   var statusLabel = (
     c.status==='nou'         ? 'Nou' :
-    c.status==='in-lucru'    ? 'Programat' :
-    c.status==='programat'   ? 'Gata' :
+    c.status==='in-lucru'    ? 'In-Lucru' :
+    c.status==='programat'   ? 'Programat' :
     c.status==='finalizat'   ? 'Finalizat' :
     c.status
   );
@@ -2922,8 +3054,8 @@ function buildListA(cases){
       +'<div class="cc-client">'+c.client+'</div>'
       +'<div class="cc-status">'+(
         c.status==='nou'         ? 'nou' :
-        c.status==='in-lucru'    ? 'programat' :
-        c.status==='programat'   ? 'gata' :
+        c.status==='in-lucru'    ? 'in-lucru' :
+        c.status==='programat'   ? 'programat' :
         c.status==='finalizat'   ? 'finalizat' :
         c.status
       )+(c.flag?' · <span class="cc-flag">! C.I.</span>':'')+'</div>'
@@ -3385,6 +3517,16 @@ function toggleVolExplorer(){
     initVolChart();
   }
 }
+// v54 (B9) — Extract the lower-bound HH:MM from a Squarespace preferred_interval
+// string like "10:00 — 12:00" or "10:00 - 12:00" or "10:00". Returns '' on no match.
+// Used to pre-fill the time picker so notary can one-click Confirmă programarea.
+function parsePrefIntervalStart(intervalStr){
+  if(!intervalStr) return '';
+  var m = String(intervalStr).match(/(\d{1,2}):(\d{2})/);
+  if(!m) return '';
+  return String(parseInt(m[1],10)).padStart(2,'0') + ':' + m[2];
+}
+
 // ══ v50 Bucket B·1 — Confirmă programarea handles two cases:
 //   (a) status='nou' (submitted): first confirmation. Transitions nou → in-lucru, fires case_in_review email.
 //   (b) status='in-lucru' or 'programat': RE-CONFIRMATION (reschedule). The notary office picked a
@@ -3412,6 +3554,14 @@ function confirmProgramare(){
   var timeInp = document.getElementById(activePrefix + '-time');
   if(dateInp && dateInp.value){ c.date = dateInp.value; }
   if(timeInp && timeInp.value){ c.time = timeInp.value; }
+  // v54 (B9) — Defensive fallback: if picker is still empty (e.g. populateView ran before
+  // prefDate landed, or the notary cleared the field), use client's preferred_at directly
+  // as scheduled_at. Keeps the one-click confirm flow alive when prefill misses.
+  if(!c.date && c.prefDate){ c.date = c.prefDate; }
+  if(!c.time){
+    var fallbackTime = parsePrefIntervalStart(c.prefInterval);
+    if(fallbackTime) c.time = fallbackTime;
+  }
   // Validate: both date and time are required to call the RPC. Without them there's no
   // scheduled_at to commit. (Squarespace + form-mandatory contract guarantee non-empty in prod.)
   if(!c.date || !c.time){
