@@ -1,6 +1,40 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v59 · CANONICAL
+  acte.legal — Dashboard v60 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v59 → v60 changelog (B21 download-flow fix):
+
+  redownloadAct (and the list-row download path) now call the new
+  get-prepared-doc-signed-url Edge Function on every click. v59
+  short-circuited on c.prepared.signed_url, but that URL has a 60s
+  TTL set at prep time — expires before notary clicks if they pause.
+  v60 always mints fresh, no stale-URL window.
+
+  Reproduction (live, master v29): notary opens a programat case,
+  clicks Pregătește act, waits ~90s reading the success toast, then
+  clicks Descarcă. Browser tab opens to InvalidJWT / 'exp claim
+  timestamp check failed'. File generates correctly server-side;
+  only the client-side download handoff was broken. v60 collapses
+  both Descarcă paths (drawer + list-row) onto a single fresh-URL-
+  per-click pattern via the new EF (master shipped + deployed +
+  smoke-tested live; returns 300s URL on demand).
+
+  Two call sites changed:
+    (1) redownloadAct (drawer Descarcă) — full body rewrite,
+        single EF call, no cached-URL short-circuit.
+    (2) fin-detail-download.onclick (list-row Descarcă) — same
+        shape, same EF, same toast strings.
+
+  Out of scope (deferred): the c.prepared.signed_url assignment in
+  prepareAct success handler (line 1925-ish) is left untouched for
+  back-compat with any other reader; future hygiene pass can prune.
+  N052 dead-mock-machinery strip also still pending.
+
+  Audit invariants confirmed (v59 → v60): backtick count unchanged
+  (4), brace count balanced, no async/await introduced, no new
+  selectors, no new ids, no markup change. Net diff: ~25 lines.
+  Rollback: notariat_dashboard_v59.html.
+
   ───────────────────────────────────────────────────────────────
   v58 → v59 changelog (doc-gen gate wired to live RPC):
 
@@ -2793,31 +2827,14 @@ function formatRelativeTime(iso){
 function redownloadAct(){
   var c = CASES.find(function(x){ return x.id === currentOpenCase; });
   if(!c || !c.prepared){ return; }
-  // Live wiring: the Edge Function returned a signed_url for the prepared docx in storage.
-  // Open it as a download via a transient anchor element. Browser handles the download dialog.
-  if (c.prepared.signed_url) {
-    try {
-      var a = document.createElement('a');
-      a.href = c.prepared.signed_url;
-      a.download = c.prepared.filename || 'act.docx';
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      showToast('Descărcat · ' + (c.prepared.filename || 'act.docx'));
-      return;
-    } catch(err) {
-      console.error('[redownloadAct]', err);
-      showToast('Eroare la descărcare');
-      return;
-    }
-  }
-  // No signed_url on c.prepared (case opened pre-existing prepared doc — signed_url not yet
-  // resolved). Re-prep the case to get a fresh signed_url. The Edge Function is idempotent
-  // for cases already in 'booked' status — it just regenerates and returns a new signed_url.
-  showToast('Se reîncarcă linkul de descărcare…');
-  callEdgeFunction('prepare-case-document', { case_id: c.id }).then(function(data){
+  // v60 — every click mints a fresh signed URL via get-prepared-doc-signed-url EF.
+  // Stale-URL bug (B21): v59 read c.prepared.signed_url directly, but that URL
+  // is generated at prep time with a 60s TTL — expires before user clicks if
+  // they pause to read the success toast. Fresh-per-click closes the window.
+  showToast('Se pregătește descărcarea…');
+  callEdgeFunction('get-prepared-doc-signed-url', { case_id: c.id }).then(function(data){
     if (!data || !data.signed_url) { throw new Error('no signed_url'); }
+    // Cache for the in-page state shape (not for reuse — every click re-fetches).
     c.prepared.signed_url = data.signed_url;
     if (data.filename) c.prepared.filename = data.filename;
     var a = document.createElement('a');
@@ -2829,7 +2846,7 @@ function redownloadAct(){
     document.body.removeChild(a);
     showToast('Descărcat · ' + (data.filename || 'act.docx'));
   }).catch(function(err){
-    console.error('[redownloadAct refresh]', err);
+    console.error('[redownloadAct]', err);
     showToast('Eroare la descărcare');
   });
 }
@@ -3596,27 +3613,11 @@ function openFinalizatDetail(caseId){
 
   // Wire action buttons. Re-bind onclick each open so caseId is correctly captured.
   document.getElementById('fin-detail-download').onclick = function(){
-    // Live wiring: download via signed_url. If c.prepared has no signed_url (e.g. case was
-    // already 'booked' from a prior session and never re-prepped this session), call the Edge
-    // Function to refresh it. Same shape as redownloadAct() in the drawer.
-    if (c.prepared && c.prepared.signed_url) {
-      try {
-        var a = document.createElement('a');
-        a.href = c.prepared.signed_url;
-        a.download = c.prepared.filename || 'act.docx';
-        a.target = '_blank';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        showToast('Descărcat · ' + (c.prepared.filename || 'act.docx'));
-      } catch(err){
-        console.error('[fin-detail-download]', err);
-        showToast('Eroare la descărcare');
-      }
-      return;
-    }
-    showToast('Se reîncarcă linkul de descărcare…');
-    callEdgeFunction('prepare-case-document', { case_id: c.id }).then(function(data){
+    // v60 — every click mints a fresh signed URL via get-prepared-doc-signed-url EF.
+    // Same B21 fix as redownloadAct(): v59 short-circuited on c.prepared.signed_url,
+    // which has a 60s TTL set at prep time. Fresh-per-click closes the stale-URL window.
+    showToast('Se pregătește descărcarea…');
+    callEdgeFunction('get-prepared-doc-signed-url', { case_id: c.id }).then(function(data){
       if (!data || !data.signed_url) { throw new Error('no signed_url'); }
       c.prepared = c.prepared || {};
       c.prepared.signed_url = data.signed_url;
