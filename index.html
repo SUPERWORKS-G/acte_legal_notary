@@ -1,6 +1,35 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v57 · CANONICAL
+  acte.legal — Dashboard v58 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v57 → v58 changelog (scroll-sound consistency pass):
+
+  Two scrollable surfaces — .comms-host (COMUNICAȚII panel) and
+  .fin-detail-body (De Finalizat detail body) — were scrolling
+  silently on overflow while every other scrollable container in
+  the dashboard played the delta-throttled picker-tick. Both
+  added to the class-based scroll-sound selector at window load.
+
+  Single-line edit at the load handler's class-based listener
+  block:
+
+    BEFORE: '.va-db-col, .vb-db-col, .vc-col, .ci-fields-pane'
+    AFTER:  '.va-db-col, .vb-db-col, .vc-col, .ci-fields-pane,
+             .comms-host, .fin-detail-body'
+
+  Audit confirmed (v57 → v58): all 10 scrollable surfaces in the
+  file (id-keyed 'today-scroll', 'va-list-scroll', 'vb-list-scroll',
+  'vc-list'; class-based '.va-db-col', '.vb-db-col', '.vc-col',
+  '.ci-fields-pane', plus the two new ones) now wire soundScroll.
+
+  Naming-only quirk noted: the div with class 'vc-list-scroll'
+  carries the id-keyed wiring under id 'vc-list' (not 'vc-list-scroll').
+  Functional, no patch needed.
+
+  Zero markup. Zero new functions. Zero JS surface change beyond
+  the two added selector strings.
+  Rollback: notariat_dashboard_v57.html.
+
   ───────────────────────────────────────────────────────────────
   v56 → v57 changelog (B17 toast default + COMUNICAȚII tighten):
 
@@ -4077,7 +4106,7 @@ window.addEventListener('load',()=>{
     if(el)el.addEventListener('scroll',soundScroll,{passive:true});
   });
   // class-based scrollable containers (unique ids not guaranteed)
-  document.querySelectorAll('.va-db-col, .vb-db-col, .vc-col, .ci-fields-pane').forEach(el=>{
+  document.querySelectorAll('.va-db-col, .vb-db-col, .vc-col, .ci-fields-pane, .comms-host, .fin-detail-body').forEach(el=>{
     el.addEventListener('scroll',soundScroll,{passive:true});
   });
   // ── v56 (B13) — Confirmă button arming. Listen to the 6 picker inputs (3 views × date/time)
