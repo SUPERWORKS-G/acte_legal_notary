@@ -1,6 +1,59 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v58 · CANONICAL
+  acte.legal — Dashboard v59 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v58 → v59 changelog (doc-gen gate wired to live RPC):
+
+  findDraftForCase — the gating function that decides whether
+  'Pregătește act ↓' renders enabled or shows 'Șablon
+  indisponibil' — was reading from the hardcoded SEEDED_DRAFTS
+  mock array. Strings drift from the real office_templates table
+  (e.g. SEEDED_DRAFTS s14 has subtype 'Semnătură'; live data has
+  subtype_label_ro 'Legalizare semnătură'), so the gate failed
+  for the real test case CASE-2026-000002 even when an active
+  template existed in the DB + storage.
+
+  v59 rewires findDraftForCase to query a live RPC
+  get_active_template_for_case (already shipped + smoke-tested
+  by master v28). Pattern: per-case in-memory cache keyed by
+  case id; first call kicks off the RPC and returns null
+  synchronously (renders 'Șablon indisponibil' for ~500ms);
+  RPC resolution writes the row into the cache and triggers a
+  re-render of the prep slot if that case is currently visible.
+
+  Cache states per entry:
+    undefined   never queried
+    'pending'   RPC in flight (renders disabled, same as null)
+    null        no active template (renders disabled)
+    object      template found ({template_id, filename,
+                subtype_label}); renders enabled
+
+  prepareAct, renderPrepSlot, populateView, hydrateCaseFromRpc
+  all unchanged — findDraftForCase still returns row-or-null
+  synchronously, so every existing call site works without
+  modification. Cache initialized fresh on script load; full
+  page reload is the only invalidation event for v59 (admin
+  template re-uploads are rare in a notary's session).
+
+  Out of scope (deferred to v60+, tracked as N052): stripping
+  dead mock machinery — SEEDED_DRAFTS, DRAFT_BLOBS, buildDocxXml,
+  buildContentTypes, buildRootRels, bodyForDraft, roleToTokenPrefix,
+  buildCaseData, plus 2 CDN tags (docxtemplater + pizzip). All
+  unreferenced after v59 but kept in place to keep this patch
+  minimal and reviewable per master v28 directive.
+
+  Two-block surgical edit:
+    (1) replaced findDraftForCase body (1732-1736) with cache-
+        backed RPC lookup + re-render trigger
+    (2) inserted TEMPLATE_CACHE declaration immediately above
+        findDraftForCase
+
+  Audit invariants confirmed (v58 → v59): backtick count
+  unchanged (4), brace count balanced (1204==1204 baseline,
+  matching offsets after edit), no async/await introduced, no
+  new selectors, no new ids, no markup change.
+  Rollback: notariat_dashboard_v58.html.
+
   ───────────────────────────────────────────────────────────────
   v57 → v58 changelog (scroll-sound consistency pass):
 
@@ -1729,10 +1782,44 @@ function buildCaseData(c){
   return data;
 }
 
+// v59 — TEMPLATE_CACHE backs findDraftForCase. Keyed by case id; entry states:
+//   undefined   never queried (initial)
+//   'pending'   RPC in flight (treated as no-template by callers)
+//   null        RPC resolved with no active template
+//   object      RPC resolved: { template_id, filename, subtype_label }
+// Initialized fresh on script load. No invalidation needed for v59 (full page
+// reload covers session boundary; admin template re-uploads are rare in-session).
+var TEMPLATE_CACHE = {};
+
 function findDraftForCase(c){
-  return SEEDED_DRAFTS.find(function(d){
-    return d.actType === c.type && d.subtype === c.subtype;
+  if(!c || !c.id) return null;
+  var cached = TEMPLATE_CACHE[c.id];
+  if(cached === 'pending') return null;        // RPC in flight, render disabled
+  if(cached !== undefined) return cached;      // resolved: row object or null
+
+  // First call for this case — kick off RPC and return null synchronously.
+  // The brief 'Șablon indisponibil' render flips to enabled when the RPC
+  // resolves and the per-case re-render below fires.
+  TEMPLATE_CACHE[c.id] = 'pending';
+  rpc('get_active_template_for_case', { p_case_id: c.id }).then(function(rows){
+    var row = (rows && rows.length > 0) ? rows[0] : null;
+    TEMPLATE_CACHE[c.id] = row;
+    if(currentOpenCase === c.id){
+      var pfx = (currentView === 'a') ? 'va' : (currentView === 'b' ? 'vb' : 'vc');
+      var prepSlot = document.getElementById(pfx + '-prep');
+      if(prepSlot) renderPrepSlot(pfx, c);
+    }
+  }).catch(function(err){
+    console.error('[get_active_template_for_case]', err);
+    TEMPLATE_CACHE[c.id] = null;
+    if(currentOpenCase === c.id){
+      var pfx = (currentView === 'a') ? 'va' : (currentView === 'b' ? 'vb' : 'vc');
+      var prepSlot = document.getElementById(pfx + '-prep');
+      if(prepSlot) renderPrepSlot(pfx, c);
+    }
   });
+
+  return null;
 }
 
 function timestampForFilename(){
