@@ -1,6 +1,42 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v60 · CANONICAL
+  acte.legal — Dashboard v61 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v60 → v61 changelog (B22 case-prep hydration):
+
+  hydrateCaseFromRpc now reads payload.prepared_document — a new
+  field on the get_case_with_parties RPC (master shipped + smoke-
+  tested live v29) that returns the latest non-superseded
+  prepared_documents row, or null. v61 populates c.prepared =
+  { id, filename, generatedAt } when the row is present, and
+  c.prepared = null when it isn't.
+
+  Reproduction (live, master v29): notary signs in fresh, opens
+  CASE-2026-000002 (status programat with an active prepared doc).
+  Drawer renders the default 'Pregătește act ↓' button instead of
+  the success block — because c.prepared was undefined post-reload
+  and renderPrepSlot's gate (c.status === 'programat' && c.prepared)
+  fell through. Backend has the data; frontend never read it.
+  v61 closes the read gap. No signed_url at hydration — fresh URL
+  is minted per Descarcă click via the v60 EF (B21 contract,
+  unchanged).
+
+  One call site changed: hydrateCaseFromRpc inserts a single block
+  between the case-merge and parties assignment. renderPrepSlot,
+  redownloadAct, regenerateAct, retryPrepareAct, fin-detail-
+  download.onclick all read c.prepared with truthy gates — null
+  vs undefined behaves identically. No downstream rewrites needed.
+
+  Out of scope (deferred): the c.prepared.signed_url assignment in
+  prepareAct success handler (line ~1956) still carries v59 shape;
+  future hygiene pass can prune now that signed_url is fetched on
+  demand. N052 dead-mock-machinery strip also still pending.
+
+  Audit invariants confirmed (v60 → v61): backtick count unchanged
+  (4), brace count balanced, no async/await introduced, no new
+  selectors, no new ids, no markup change. Net diff: ~26 lines.
+  Rollback: notariat_dashboard_v60.html.
+
   ───────────────────────────────────────────────────────────────
   v59 → v60 changelog (B21 download-flow fix):
 
@@ -2313,6 +2349,30 @@ function hydrateCaseFromRpc(caseId){
       if (caseRow.client_email) c.client_email = caseRow.client_email;
       if (caseRow.client_phone) c.client_phone = caseRow.client_phone;
       if (caseRow.internal_notes) c.notes = caseRow.internal_notes;
+    }
+    // v61 (B22) — hydrate c.prepared from RPC payload's new prepared_document field.
+    // Master extended get_case_with_parties RPC v29 to return the latest non-superseded
+    // prepared_documents row (or null). renderPrepSlot reads c.status === 'programat' &&
+    // c.prepared as the gate for the Descarcă ↓ block; without this hydration, any
+    // page-reload of a programat case falls through to the default Pregătește render
+    // and redownloadAct short-circuits.
+    //
+    // No signed_url here — fresh URL is fetched per Descarcă click via the v60
+    // get-prepared-doc-signed-url Edge Function. Hydration only carries enough
+    // metadata for renderPrepSlot to display the success block (filename + relative
+    // generation time).
+    if (payload.prepared_document) {
+      c.prepared = {
+        id:          payload.prepared_document.id,
+        filename:    payload.prepared_document.filename,
+        generatedAt: payload.prepared_document.generated_at
+      };
+    } else {
+      // Explicit null for cases without an active prepared doc (NOU / ACTIV / regenerated-
+      // and-superseded cases). Don't leave undefined — renderPrepSlot's gate uses truthy
+      // check, but other read sites may need to differentiate 'not yet hydrated' from
+      // 'definitely none.'
+      c.prepared = null;
     }
     c.parties = (payload.parties || []).map(rpcPartyToInMemory);
     c.notes_full = payload.notes || [];           // raw notes array (used by saveNotes refresh)
