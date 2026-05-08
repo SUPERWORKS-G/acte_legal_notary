@@ -551,7 +551,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
    meta line below (template slug · timestamp · recipient). Locked design tokens; no new
    colors or fonts. */
 .comms-empty{font-size:13px;color:var(--grey2);padding:6px 0 18px;font-style:normal;}
-.comms-host{max-height:240px;overflow-y:auto;}
+.comms-host{max-height:120px;overflow-y:auto;}
 .comms-item{padding:8px 0 14px;border-bottom:1px solid var(--rule);line-height:1.35;}
 .comms-item:last-child{border-bottom:none;}
 .comms-subject{font-size:14px;font-weight:400;color:var(--ink);}
@@ -562,6 +562,9 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
 .btn-confirm{display:flex;align-items:center;justify-content:center;width:100%;background:var(--ink);color:var(--white);font-family:var(--sans);font-size:14px;font-weight:400;text-align:center;padding:12px 22px;border:none;cursor:pointer;transition:background 0.15s,transform 0.1s;line-height:1.2;}
 .btn-confirm:hover{background:var(--ink);opacity:0.85;}
 .btn-confirm:active{transform:scale(0.98);}
+.btn-confirm:disabled,.btn-confirm[disabled]{opacity:0.35;cursor:not-allowed;}
+.btn-confirm:disabled:hover,.btn-confirm[disabled]:hover{background:var(--ink);opacity:0.35;}
+.btn-confirm:disabled:active,.btn-confirm[disabled]:active{transform:none;}
 
 /* ══ COL ACTION — button embedded at bottom of a scrollable column ══ */
 .col-action{margin-top:32px;}
@@ -2278,7 +2281,7 @@ const ACT_INFO={
 
 const TAGS={
   'nou':'<span class="tag tag-nou">Nou</span>',
-  'in-lucru':'<span class="tag tag-lucru">În Curs</span>',
+  'in-lucru':'<span class="tag tag-lucru">Activ</span>',
   'programat':'<span class="tag tag-programat">Programat</span>',
   'finalizat':'<span class="tag tag-finalizat">Finalizat</span>'
 };
@@ -2426,7 +2429,7 @@ function renderDisc(disc,prefix,caseId){return '';}
 // and the locked transition gates. Phase 4b admin UI may still allow manual overrides for support.
 function statusSelHTML(prefix,status){
   var states=['nou','in-lucru','programat','finalizat'];
-  var labels=['Nou','În Curs','Programat','Finalizat'];
+  var labels=['Nou','Activ','Programat','Finalizat'];
   var classes=['active-nou','active-lucru','active-prog','active-fin'];
   return '<div class="status-sel-wrap">'
     +'<span class="status-sel-lbl">Status dosar</span>'
@@ -2962,6 +2965,9 @@ function populateView(prefix,c,preserveScroll){
   var prefillTime = c.time || parsePrefIntervalStart(c.prefInterval) || '';
   document.getElementById(prefix+'-date').value=prefillDate;
   document.getElementById(prefix+'-time').value=prefillTime;
+  // v56 (B13) — Initial state of Confirmă button: enabled only when picker has both date and time.
+  // (Live updates wired once at page load via input listeners — see updateConfirmBtnState.)
+  updateConfirmBtnState(prefix);
   if(document.getElementById(prefix+'-notes'))document.getElementById(prefix+'-notes').value=c.notes;
   document.getElementById(prefix+'-hist').innerHTML=c.hist.map(function(h){return '<div class="hist-item">'+h+'</div>';}).join('');
   // ══ Comms panel — read-only sent-email log. Loaded async via get_case_email_log.
@@ -3029,7 +3035,7 @@ function sharedRow(c,i,clickFn){
   // surfaced in retest gate 3. v55: display label IN-LUCRU → ÎN CURS (one-line fit).
   var statusLabel = (
     c.status==='nou'         ? 'Nou' :
-    c.status==='in-lucru'    ? 'În Curs' :
+    c.status==='in-lucru'    ? 'Activ' :
     c.status==='programat'   ? 'Programat' :
     c.status==='finalizat'   ? 'Finalizat' :
     c.status
@@ -3056,7 +3062,7 @@ function buildListA(cases){
       +'<div class="cc-client">'+c.client+'</div>'
       +'<div class="cc-status">'+(
         c.status==='nou'         ? 'nou' :
-        c.status==='in-lucru'    ? 'în curs' :
+        c.status==='in-lucru'    ? 'activ' :
         c.status==='programat'   ? 'programat' :
         c.status==='finalizat'   ? 'finalizat' :
         c.status
@@ -3529,6 +3535,30 @@ function parsePrefIntervalStart(intervalStr){
   return String(parseInt(m[1],10)).padStart(2,'0') + ':' + m[2];
 }
 
+// v56 (B13) — Disable Confirmă programarea when picker is incomplete. Prevents the silent-fail
+// path where a case has both preferred_at and preferred_time_interval NULL: picker prefill leaves
+// inputs empty, user clicks Confirmă, gets a toast they don't connect to. Now the button is
+// visibly disabled with a tooltip until the notary picks both date and time.
+//
+// Resolution: button is found via querySelector('.btn-confirm', wrapper) — the wrappers
+// (va-confirm-action / vb-confirm-action / vc-confirm-action) already have stable ids; the
+// buttons themselves don't need new ids. Backwards-compatible.
+function updateConfirmBtnState(prefix){
+  var wrap = document.getElementById(prefix + '-confirm-action');
+  if(!wrap) return;
+  var btn = wrap.querySelector('.btn-confirm');
+  if(!btn) return;
+  var dateEl = document.getElementById(prefix + '-date');
+  var timeEl = document.getElementById(prefix + '-time');
+  var hasBoth = !!(dateEl && dateEl.value && timeEl && timeEl.value);
+  btn.disabled = !hasBoth;
+  if(hasBoth){
+    btn.removeAttribute('title');
+  } else {
+    btn.setAttribute('title', 'Selectează data și ora pentru a confirma.');
+  }
+}
+
 // ══ v50 Bucket B·1 — Confirmă programarea handles two cases:
 //   (a) status='nou' (submitted): first confirmation. Transitions nou → in-lucru, fires case_in_review email.
 //   (b) status='in-lucru' or 'programat': RE-CONFIRMATION (reschedule). The notary office picked a
@@ -3593,7 +3623,7 @@ function confirmProgramare(){
     } else {
       c.hist = c.hist || [];
       c.hist.push(histStamp() + ' — reprogramat' + dtSuffix);
-      showToast('Programare re-confirmată — clientul a fost notificat.');
+      showToast('Programare re-confirmată — clientul a fost notificat.', 3500);
     }
     refreshStatusVisuals(c);
     populateView(activePrefix, c, true);
@@ -3952,6 +3982,18 @@ window.addEventListener('load',()=>{
   document.querySelectorAll('.va-db-col, .vb-db-col, .vc-col, .ci-fields-pane').forEach(el=>{
     el.addEventListener('scroll',soundScroll,{passive:true});
   });
+  // ── v56 (B13) — Confirmă button arming. Listen to the 6 picker inputs (3 views × date/time)
+  // and toggle their respective Confirmă button's disabled state whenever picker contents change.
+  // Uses both 'input' (live typing into time field) and 'change' (date picker commit on blur).
+  ['va','vb','vc'].forEach(function(pfx){
+    ['date','time'].forEach(function(kind){
+      var el = document.getElementById(pfx + '-' + kind);
+      if(!el) return;
+      var handler = function(){ updateConfirmBtnState(pfx); };
+      el.addEventListener('input', handler);
+      el.addEventListener('change', handler);
+    });
+  });
 });
 
 function initVolChart(){
@@ -4006,7 +4048,7 @@ function updateChartNote(){
 
 // ══ HELPERS ══
 let toastTimer;
-function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),1600);}
+function showToast(m,ms){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),ms||1600);}
 function cp(val,label){soundCopy();navigator.clipboard.writeText(val).catch(()=>{});showToast(label);}
 
 // ══ DOC GENERATOR INIT ══
