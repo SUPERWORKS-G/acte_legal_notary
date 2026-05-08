@@ -1,6 +1,76 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v52 · CANONICAL
+  acte.legal — Dashboard v56 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v55 → v56 changelog (B13 button arming + B14 toast linger +
+                       B16 height correction + ACTIV relabel):
+
+  1) B13 — Confirmă programarea button is now visibly disabled
+     (opacity .35, cursor not-allowed, tooltip "Selectează data
+     și ora pentru a confirma.") whenever the picker is missing
+     date or time. New helper updateConfirmBtnState(prefix) is
+     called from populateView (initial state) and from input/
+     change listeners on the 6 picker inputs (va/vb/vc × date/
+     time, wired once at window load). Buttons resolved via
+     querySelector('.btn-confirm', wrapper) — no new ids needed.
+     New CSS: .btn-confirm:disabled / [disabled] (+ :hover and
+     :active overrides). The original toast in confirmProgramare
+     ("Selectați data și ora pentru programare.") is kept as a
+     last-line defense — should never fire in practice now.
+     Closes the silent-fail path for cases with both
+     preferred_at and preferred_time_interval NULL.
+
+  2) B14 — re-confirm toast linger bumped 1600ms → 3500ms.
+     showToast(m) → showToast(m, ms?). Default 1600ms preserved
+     for all 30+ existing call sites (backwards-compatible). Only
+     the re-confirm path (status in-lucru/programat → re-confirm)
+     passes 3500ms. Diagnostic disproved the bootstrap's
+     picker-empty hypothesis — picker fills correctly post-
+     confirm; root cause was UX-perception (toast too brief to
+     read on a path with no other visual feedback). First-confirm
+     stays at 1600ms because the NOU → ACTIV pill flip anchors
+     attention.
+
+  3) B16 — .comms-host max-height corrected 240px → 120px. Now
+     shows ~1 entry comfortably with a peek of the next, signaling
+     scroll. Three view divs (#va-comms / #vb-comms / #vc-comms)
+     unchanged.
+
+  4) ACTIV relabel (supersedes ÎN CURS from v55). Same 4 sites:
+     TAGS dict pill (.tag-lucru renders ACTIV via existing
+     uppercase transform), statusSelHTML segmented control labels
+     array, list-row statusLabel ternary, case-card lowercase
+     ternary (renders activ via existing lowercase transform).
+     Backend status enum (in_review) and UI vocab slug (in-lucru)
+     untouched. Dashboard summary card on line 884 was already
+     "Activ" pre-relabel — full convergence.
+
+  Zero markup added. Zero new RPCs / SQL / schema. Zero new
+  backticks (still 2 preexisting prose-comment exceptions).
+  ES5 + Promises preserved. Tag balance identical to v55.
+  Rollback: notariat_dashboard_v55.html.
+
+  ───────────────────────────────────────────────────────────────
+  v52 → v55 (consolidated — full detail in project handoff docs):
+
+  v53 (master patch series): party-data RPC repairs, Squarespace
+       intake form integration, document-generation backend
+       wiring (4c3 / 4c4 / 4c35 batches). Dashboard-side: minor
+       CI corrections, sort-helper hardening, status routing.
+
+  v54: B9 picker prefill chain — populateView now pre-fills
+       (prefix)-date / (prefix)-time inputs from c.date/c.time
+       (committed booked datetime), falling back to c.prefDate +
+       parsePrefIntervalStart(c.prefInterval). Also: hydrate-
+       case-from-rpc adapter reads booked_at into c.date/c.time
+       (RPC emits booked_at, not scheduled_at — confirmed via
+       v56 B14 diagnostic).
+
+  v55 (parked B13/B14 for v56 chat): B16 .comms-host class added
+       at 240px (corrected to 120px in v56), three view divs
+       tagged with .comms-host. ÎN CURS relabel at 4 sites
+       (superseded by ACTIV in v56).
+
   ───────────────────────────────────────────────────────────────
   v48 → v49 changelog (cosmetic, Dosare-explorator cleanup):
 
