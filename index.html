@@ -1,6 +1,34 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v56 · CANONICAL
+  acte.legal — Dashboard v57 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v56 → v57 changelog (B17 toast default + COMUNICAȚII tighten):
+
+  1) B17 — showToast default duration bumped 1600ms → 3000ms.
+     One-character edit at the function body's setTimeout:
+     ms||1600 → ms||3000. All explicit-override callers preserved
+     (e.g. the 3500ms re-confirm toast at confirmProgramare).
+     Master observed under-1-second readable visibility at
+     1600ms during gate-3 retest — toast fade-in/out CSS
+     transitions consume ~200-400ms total, so 1600ms total left
+     ~1200ms readable. Below threshold for short Romanian
+     phrases. 3000ms gives a comfortable ~2.5s readable window.
+
+  2) COMUNICAȚII tighten — .comms-host max-height 120px → 90px.
+     v56 shipped 120px (1 entry + peek of 2nd, intended as
+     scroll affordance). George prefers strict 1-entry render
+     with no chopped peek. .comms-item geometry is ~63px (8px
+     top pad + ~22px subject + ~18px meta + 14px bottom pad +
+     1px hairline) — 90px gives clean breathing room for one
+     full entry without revealing the 2nd. Scroll behavior
+     unchanged: panels with 2+ entries scroll normally inside
+     the 90px cap.
+
+  Zero markup. Zero new functions. Zero JS surface change.
+  Backwards-compatible: showToast call signature unchanged
+  (optional ms param still optional, just with a new default).
+  Rollback: notariat_dashboard_v56.html.
+
   ───────────────────────────────────────────────────────────────
   v55 → v56 changelog (B13 button arming + B14 toast linger +
                        B16 height correction + ACTIV relabel):
@@ -621,7 +649,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
    meta line below (template slug · timestamp · recipient). Locked design tokens; no new
    colors or fonts. */
 .comms-empty{font-size:13px;color:var(--grey2);padding:6px 0 18px;font-style:normal;}
-.comms-host{max-height:120px;overflow-y:auto;}
+.comms-host{max-height:90px;overflow-y:auto;}
 .comms-item{padding:8px 0 14px;border-bottom:1px solid var(--rule);line-height:1.35;}
 .comms-item:last-child{border-bottom:none;}
 .comms-subject{font-size:14px;font-weight:400;color:var(--ink);}
@@ -4118,7 +4146,7 @@ function updateChartNote(){
 
 // ══ HELPERS ══
 let toastTimer;
-function showToast(m,ms){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),ms||1600);}
+function showToast(m,ms){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),ms||3000);}
 function cp(val,label){soundCopy();navigator.clipboard.writeText(val).catch(()=>{});showToast(label);}
 
 // ══ DOC GENERATOR INIT ══
