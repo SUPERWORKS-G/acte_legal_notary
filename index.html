@@ -1,6 +1,63 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v61 · CANONICAL
+  acte.legal — Dashboard v62 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v61 → v62 changelog (N052 dead-mock-strip + N054 height-sync race fix):
+
+  N052 — strip dead browser-side mock doc-gen machinery left over
+  from the pre-EF era. Replaced months ago by the real backend
+  prepare-case-document Edge Function + RPC chain (v53+); the mock
+  array, blob synthesizer, role-token map, docx XML builders, and
+  seedLibrary boot init have been unreferenced from any live code
+  path since the v59 RPC-gating migration. Stripped:
+
+    Symbols:  SEEDED_DRAFTS, DRAFT_BLOBS, roleToTokenPrefix,
+              buildCaseData, timestampForFilename, buildDocxXml,
+              buildContentTypes, buildRootRels, bodyForDraft,
+              synthesizeDocxBlob, seedLibrary
+    CDN tags: unpkg.com/pizzip@3.1.6, unpkg.com/docxtemplater@3.50.0
+    Boot:     'DOC GENERATOR INIT' seedLibrary().catch block
+
+  Two non-contiguous strip ranges, since live findDraftForCase +
+  TEMPLATE_CACHE (v59 RPC-backed gate) sit between the two halves
+  of the dead block. Confirmed live + functional: findDraftForCase
+  call sites in renderPrepSlot / prepareAct unchanged; TEMPLATE_CACHE
+  per-case keyed lookup unchanged. JSZip CDN tag KEPT — live use
+  in downloadAllDocs (CI bulk-download zip), unrelated working
+  feature.
+
+  N054 — fix .va-name-row height-sync race. The rAF in the window
+  load handler measured #va-fields .field-stacked offsetHeight
+  immediately after bootLiveDashboard() was invoked, but boot is
+  async (Promise.all → RPC chain → selA → populateView). At rAF
+  time #va-fields was still empty, querySelector returned null,
+  the if(fs && row) guard silently no-op'd, and .va-name-row fell
+  back to its CSS-only height (~48px instead of the canonical
+  ~57px target matching the NUMĂR DOSAR row directly below).
+
+  Surfaced post-park by George (visual mismatch in PARALEL view).
+  v62 relocates the sync inside bootLiveDashboard's success branch,
+  immediately after selA(CASES[0].id) — that path synchronously
+  writes the field rows into #va-fields, so the rAF can measure
+  the now-rendered first .field-stacked row and apply the correct
+  height. Restores v49 patch 4's canonical design (font-load
+  resilient, no magic numbers).
+
+  Out of scope (deferred): N034 label decomposition still pending.
+  N053 (toast duration) closed as no-op during master recon —
+  showToast default is already 3000ms, perceived shortness was
+  the 150ms CSS fade, not a timer bug.
+
+  Audit invariants confirmed (v61 → v62): backtick count unchanged
+  (4), brace count balanced, no async/await introduced, no new
+  selectors, no new ids, no markup change beyond strip. Net delta:
+  ~135 lines removed, +13 lines added (N054 sync block + banner).
+  Live code surfaces preserved: findDraftForCase + TEMPLATE_CACHE,
+  prepareAct + EF flow, redownloadAct + fin-detail-download
+  (B21 v60), hydrateCaseFromRpc + prepared_document (B22 v61),
+  downloadAllDocs JSZip path.
+  Rollback: notariat_dashboard_v61.html.
+
   ───────────────────────────────────────────────────────────────
   v60 → v61 changelog (B22 case-prep hydration):
 
@@ -387,8 +444,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
-<script src="https://unpkg.com/pizzip@3.1.6/dist/pizzip.js"></script>
-<script src="https://unpkg.com/docxtemplater@3.50.0/build/docxtemplater.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1798,60 +1853,6 @@ function extraFieldsFor(subtype, role){
   return s[role] || [];
 }
 
-var SEEDED_DRAFTS = [
-  {id:'s1', actType:'procuri',      subtype:'Vânzare imobil',            name:'Procură — Vânzare imobil'},
-  {id:'s2', actType:'procuri',      subtype:'Cumpărare imobil',          name:'Procură — Cumpărare imobil'},
-  {id:'s3', actType:'procuri',      subtype:'Vânzare auto',              name:'Procură — Vânzare auto'},
-  {id:'s4', actType:'procuri',      subtype:'Bancară',                   name:'Procură — Bancară'},
-  {id:'s5', actType:'procuri',      subtype:'Generală',                  name:'Procură — Generală'},
-  {id:'s6', actType:'declaratii',   subtype:'Acceptare succesiune',   name:'Declarație — Acceptare succesiune'},
-  {id:'s7', actType:'declaratii',   subtype:'Renunțare succesiune',   name:'Declarație — Renunțare succesiune'},
-  {id:'s8', actType:'declaratii',   subtype:'Luare în spațiu',        name:'Declarație — Luare în spațiu'},
-  {id:'s9', actType:'declaratii',   subtype:'De notorietate',         name:'Declarație — De notorietate'},
-  {id:'s10',actType:'imputerniciri',subtype:'Generală',            name:'Împuternicire — Generală'},
-  {id:'s11',actType:'imputerniciri',subtype:'Bancară',             name:'Împuternicire — Bancară'},
-  {id:'s12',actType:'acorduri',     subtype:'Partaj bunuri',               name:'Acord — Partaj bunuri'},
-  {id:'s13',actType:'acorduri',     subtype:'Între soți — divorț',name:'Acord — Între soți'},
-  {id:'s14',actType:'legalizari',   subtype:'Semnătură',              name:'Legalizare — Semnătură'},
-  {id:'s15',actType:'legalizari',   subtype:'Copie',                  name:'Legalizare — Copie'}
-];
-
-var DRAFT_BLOBS = {}; // id -> ArrayBuffer
-
-function roleToTokenPrefix(roleName){
-  var noDiacritics = roleName
-    .replace(/ă/g,'a').replace(/Ă/g,'A')
-    .replace(/â/g,'a').replace(/Â/g,'A')
-    .replace(/î/g,'i').replace(/Î/g,'I')
-    .replace(/ș/g,'s').replace(/Ș/g,'S')
-    .replace(/ț/g,'t').replace(/Ț/g,'T');
-  return noDiacritics.toUpperCase().replace(/[\s\/]+/g, '_');
-}
-
-function buildCaseData(c){
-  var data = {};
-  (c.parties || []).forEach(function(party){
-    var prefix = roleToTokenPrefix(party.role);
-    FIELD_REGISTRY.forEach(function(f){
-      var matched = party.fields.find(function(pf){ return pf.l === f.fieldLabel; });
-      data[prefix + '_' + f.tokenSuffix] = matched ? matched.v : '';
-    });
-    // Extras → uppercase the key, prefix with role (v50 Change 3)
-    var extras = party.extra_fields || {};
-    Object.keys(extras).forEach(function(k){
-      var tokenKey = prefix + '_' + k.toUpperCase();
-      data[tokenKey] = extras[k] || '';
-    });
-  });
-  // Case-level tokens (unprefixed per 0g)
-  data.CASE_REF = c.ref || '';
-  data.ACT_TYPE = c.act || '';
-  data.APPOINTMENT_DATE = (c.date || '') + (c.time ? ' ' + c.time : '');
-  data.CLIENT_PHONE = c.client_phone || '';
-  data.CLIENT_EMAIL = c.client_email || '';
-  return data;
-}
-
 // v59 — TEMPLATE_CACHE backs findDraftForCase. Keyed by case id; entry states:
 //   undefined   never queried (initial)
 //   'pending'   RPC in flight (treated as no-template by callers)
@@ -1890,85 +1891,6 @@ function findDraftForCase(c){
   });
 
   return null;
-}
-
-function timestampForFilename(){
-  var d = new Date();
-  var pad = function(n){ return n < 10 ? '0' + n : '' + n; };
-  return pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
-}
-
-function buildDocxXml(bodyParagraphs){
-  var paragraphs = bodyParagraphs.map(function(text){
-    var safe = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return '<w:p><w:r><w:t xml:space="preserve">' + safe + '</w:t></w:r></w:p>';
-  }).join('');
-  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-    + '<w:body>' + paragraphs + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body>'
-    + '</w:document>';
-}
-
-function buildContentTypes(){
-  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-    + '<Default Extension="xml" ContentType="application/xml"/>'
-    + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-    + '</Types>';
-}
-
-function buildRootRels(){
-  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    + '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-    + '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
-    + '</Relationships>';
-}
-
-function bodyForDraft(draftId){
-  var bodies = {
-    s1: [
-      'PROCURĂ',
-      '',
-      'Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, identificat cu CI seria {MANDANT_ID_SERIES}, născut la data de {MANDANT_BIRTH_DATE}, domiciliat în {MANDANT_ADDRESS}, telefon {MANDANT_PHONE},',
-      '',
-      'împuternicesc prin prezenta pe {MANDATAR_NAME}, CNP {MANDATAR_CNP}, identificat cu CI seria {MANDATAR_ID_SERIES}, domiciliat în {MANDATAR_ADDRESS}, telefon {MANDATAR_PHONE},',
-      '',
-      'să mă reprezinte la vânzarea imobilului aflat în proprietatea mea, cu toate drepturile și obligațiile ce decurg din această calitate.',
-      '',
-      'Dosar: {CASE_REF} · Act: {ACT_TYPE} · Data programării: {APPOINTMENT_DATE}'
-    ],
-    s2: ['PROCURĂ','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, domiciliat în {MANDANT_ADDRESS}, împuternicesc pe {MANDATAR_NAME}, CNP {MANDATAR_CNP}, să mă reprezinte la cumpărarea unui imobil.','','Dosar: {CASE_REF}'],
-    s3: ['PROCURĂ VÂNZARE AUTO','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, domiciliat în {MANDANT_ADDRESS}, împuternicesc pe {MANDATAR_NAME}, CNP {MANDATAR_CNP}, să vândă autovehiculul.','','Dosar: {CASE_REF} · Data: {APPOINTMENT_DATE}'],
-    s4: ['PROCURĂ BANCARĂ','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, împuternicesc pe {MANDATAR_NAME}, CNP {MANDATAR_CNP}, să efectueze operațiuni bancare.','','Dosar: {CASE_REF}'],
-    s5: ['PROCURĂ GENERALĂ','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, domiciliat în {MANDANT_ADDRESS}, împuternicesc pe {MANDATAR_NAME}, CNP {MANDATAR_CNP}, domiciliat în {MANDATAR_ADDRESS}, să îndeplinească acte de conservare și administrare.','','Dosar: {CASE_REF}'],
-    s6: ['DECLARAȚIE DE ACCEPTARE A SUCCESIUNII','','Subsemnatul {DECLARANT_NAME}, CNP {DECLARANT_CNP}, CI {DECLARANT_ID_SERIES}, născut la {DECLARANT_BIRTH_DATE}, domiciliat în {DECLARANT_ADDRESS}, telefon {DECLARANT_PHONE}, declar că accept succesiunea.','','Dosar: {CASE_REF}'],
-    s7: ['DECLARAȚIE DE RENUNȚARE LA SUCCESIUNE','','Subsemnatul {DECLARANT_NAME}, CNP {DECLARANT_CNP}, domiciliat în {DECLARANT_ADDRESS}, declar că renunț la succesiune.','','Dosar: {CASE_REF}'],
-    s8: ['DECLARAȚIE DE LUARE ÎN SPAȚIU','','Subsemnatul {DECLARANT_NAME}, CNP {DECLARANT_CNP}, CI {DECLARANT_ID_SERIES}, proprietar al imobilului situat în {DECLARANT_ADDRESS}, telefon {DECLARANT_PHONE}, declar că sunt de acord cu luarea în spațiu.','','Dosar: {CASE_REF} · Data: {APPOINTMENT_DATE}'],
-    s9: ['DECLARAȚIE DE NOTORIETATE','','Subsemnatul {DECLARANT_NAME}, CNP {DECLARANT_CNP}, CI {DECLARANT_ID_SERIES}, domiciliat în {DECLARANT_ADDRESS}, declar pe proprie răspundere.','','Dosar: {CASE_REF}'],
-    s10:['ÎMPUTERNICIRE GENERALĂ','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, domiciliat în {MANDANT_ADDRESS}, împuternicesc pe {IMPUTERNICIT_NAME}, CNP {IMPUTERNICIT_CNP}, domiciliat în {IMPUTERNICIT_ADDRESS}.','','Dosar: {CASE_REF}'],
-    s11:['ÎMPUTERNICIRE BANCARĂ','','Subsemnatul {MANDANT_NAME}, CNP {MANDANT_CNP}, CI {MANDANT_ID_SERIES}, domiciliat în {MANDANT_ADDRESS}, împuternicesc pe {IMPUTERNICIT_NAME}, CNP {IMPUTERNICIT_CNP}, CI {IMPUTERNICIT_ID_SERIES}, domiciliat în {IMPUTERNICIT_ADDRESS}, să efectueze operațiuni bancare.','','Dosar: {CASE_REF} · Data: {APPOINTMENT_DATE}'],
-    s12:['ACORD DE PARTAJ','','Între: {PARTE_I_NAME}, CNP {PARTE_I_CNP}, domiciliat în {PARTE_I_ADDRESS} și {PARTE_II_NAME}, CNP {PARTE_II_CNP}, domiciliat în {PARTE_II_ADDRESS}, s-a încheiat prezentul acord de partaj.','','Dosar: {CASE_REF}'],
-    s13:['ACORD DE DIVORȚ NOTARIAL','','Subsemnații {PARTE_I_NAME} (CNP {PARTE_I_CNP}) și {PARTE_II_NAME} (CNP {PARTE_II_CNP}), declarăm de comun acord desfacerea căsătoriei.','','Dosar: {CASE_REF} · Data: {APPOINTMENT_DATE}'],
-    s14:['LEGALIZARE SEMNĂTURĂ','','Se legalizează semnătura d-lui {SEMNATAR_NAME}, CNP {SEMNATAR_CNP}, CI {SEMNATAR_ID_SERIES}, domiciliat în {SEMNATAR_ADDRESS}.','','Dosar: {CASE_REF} · Data: {APPOINTMENT_DATE}'],
-    s15:['LEGALIZARE COPIE','','Se legalizează copia prezentată de {SEMNATAR_NAME}, CNP {SEMNATAR_CNP}, domiciliat în {SEMNATAR_ADDRESS}.','','Dosar: {CASE_REF}']
-  };
-  return bodies[draftId] || ['Șablon gol'];
-}
-
-function synthesizeDocxBlob(draftId){
-  var zip = new JSZip();
-  zip.file('[Content_Types].xml', buildContentTypes());
-  zip.folder('_rels').file('.rels', buildRootRels());
-  zip.folder('word').file('document.xml', buildDocxXml(bodyForDraft(draftId)));
-  return zip.generateAsync({type:'arraybuffer', mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
-}
-
-function seedLibrary(){
-  var promises = SEEDED_DRAFTS.map(function(d){
-    return synthesizeDocxBlob(d.id).then(function(buf){ DRAFT_BLOBS[d.id] = buf; });
-  });
-  return Promise.all(promises);
 }
 
 function prepareAct(){
@@ -2539,6 +2461,17 @@ function bootLiveDashboard(){
       if (typeof rebuildAllLists === 'function') rebuildAllLists();
       // Open first case in slider A if any exist (preserves v52's selA(1) boot UX).
       if (CASES.length > 0 && typeof selA === 'function') selA(CASES[0].id);
+      // N054 — sync .va-name-row height to match a .field-stacked row now that
+      // populateView('va', ...) has populated #va-fields. Original v52 rAF in the
+      // window 'load' handler raced bootLiveDashboard and silently no-op'd.
+      // rAF here ensures layout has settled after the populateView() DOM writes.
+      if (CASES.length > 0) {
+        requestAnimationFrame(function(){
+          var fs = document.querySelector('#va-fields .field-stacked');
+          var row = document.querySelector('.va-name-row');
+          if (fs && row) { row.style.height = fs.offsetHeight + 'px'; }
+        });
+      }
     });
   }).catch(function(err){
     console.error('[bootLiveDashboard]', err);
@@ -4239,14 +4172,6 @@ window.addEventListener('load',()=>{
   // appointments in parallel, then re-runs rebuildAllLists and opens the first case in slider A
   // (preserves v52's selA(1) boot UX, but with whatever case the office has at index 0).
   bootLiveDashboard();
-  // Sync .va-name-row height to match a .field-stacked row (e.g. NUMĂR DOSAR)
-  // so the name+status row has the same vertical rhythm as the detail fields below it.
-  // Measured at runtime — survives font loading shifts.
-  requestAnimationFrame(()=>{
-    const fs=document.querySelector('#va-fields .field-stacked');
-    const row=document.querySelector('.va-name-row');
-    if(fs&&row){row.style.height=fs.offsetHeight+'px';}
-  });
   // ── SCROLL SOUNDS — delta-throttled pick-ticks (~56px per tick)
   // id-keyed containers
   ['today-scroll','va-list-scroll','vb-list-scroll','vc-list'].forEach(id=>{
@@ -4326,11 +4251,6 @@ let toastTimer;
 function showToast(m,ms){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),ms||3000);}
 function cp(val,label){soundCopy();navigator.clipboard.writeText(val).catch(()=>{});showToast(label);}
 
-// ══ DOC GENERATOR INIT ══
-seedLibrary().catch(function(err){
-  console.error('Seed library failed',err);
-  showToast('Eroare inițializare bibliotecă');
-});
 </script>
 </body>
 </html>
