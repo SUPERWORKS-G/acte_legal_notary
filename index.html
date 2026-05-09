@@ -3808,16 +3808,45 @@ function confirmProgramare(){
     showToast('Selectați data și ora pentru programare.');
     return;
   }
-  // Build ISO timestamptz to send to the RPC. Browser-local datetime → ISO with offset.
-  var localDt = new Date(c.date + 'T' + c.time);
-  if(isNaN(localDt)){
+  // Build ISO timestamptz to send to the RPC.
+  // B19.5 fix: picker input must be interpreted as Europe/Bucharest local time
+  // regardless of where the notary's browser is. Without this, a notary in
+  // Hungary (CEST=UTC+2) picking 14:00 stores 12:00 UTC = 15:00 Bucharest.
+  // Storage stays UTC; picker is locale-locked to Bucharest per Directive 11.17.
+  var dParts = c.date.split('-');
+  var tParts = c.time.split(':');
+  var y = parseInt(dParts[0], 10), mo = parseInt(dParts[1], 10) - 1, d = parseInt(dParts[2], 10);
+  var hh = parseInt(tParts[0], 10), mm = parseInt(tParts[1], 10);
+  if(isNaN(y)||isNaN(mo)||isNaN(d)||isNaN(hh)||isNaN(mm)){
+    showToast('Data sau ora sunt invalide.');
+    return;
+  }
+  // Compute Bucharest's UTC offset for this exact local moment by asking
+  // Intl what the picked wall-clock time would be IF interpreted as UTC,
+  // then adjusting until the readback matches. Bucharest offsets are whole
+  // hours (+2 winter / +3 summer), so one pass is sufficient.
+  var probeUtcMs = Date.UTC(y, mo, d, hh, mm, 0);
+  var bucharestParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Bucharest',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  }).formatToParts(new Date(probeUtcMs));
+  var bp = {};
+  for(var i=0;i<bucharestParts.length;i++){ bp[bucharestParts[i].type] = bucharestParts[i].value; }
+  var probedHh = parseInt(bp.hour, 10);
+  if(probedHh === 24) probedHh = 0;
+  var shiftHours = probedHh - hh;
+  if(shiftHours > 12) shiftHours -= 24;
+  if(shiftHours < -12) shiftHours += 24;
+  var localDt = new Date(probeUtcMs - (shiftHours * 3600 * 1000));
+  if(isNaN(localDt.getTime())){
     showToast('Data sau ora sunt invalide.');
     return;
   }
   var scheduledAtIso = localDt.toISOString();
   // History suffix for optimistic stamp.
-  var dtSuffix = ', ' + localDt.getDate() + ' ' + RO_M_SHORT[localDt.getMonth()]
-               + ' ' + localDt.getFullYear() + ' ' + c.time;
+  var dtSuffix = ', ' + d + ' ' + RO_M_SHORT[mo]
+               + ' ' + y + ' ' + c.time;
   var wasNou = (c.status === 'nou');
 
   rpc('confirm_case_booking', { p_case_id: c.id, p_scheduled_at: scheduledAtIso }).then(function(){
