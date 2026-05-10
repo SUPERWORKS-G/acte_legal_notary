@@ -1,6 +1,52 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v66 · CANONICAL · download-flag patch 2026-05-10
+  acte.legal — Dashboard v67 · CANONICAL · assertShape instrumentation 2026-05-10
+  ───────────────────────────────────────────────────────────────
+  v66 → v67 changelog (D001 mitigation — runtime RPC shape contract):
+
+  Section 18 D001 (hydrator rename layer) accepts the lighter
+  mitigation path: full rename refactor deferred post-launch,
+  but a runtime contract assertion lands now to catch any
+  *missing* RPC keys loudly on first dev load.
+
+  New helper: assertShape(payload, expectedKeys, label). Pure
+  function, ES5, no deps. Returns array of missing keys.
+  Behavior tier driven by hostname:
+    - dev (localhost / 127.0.0.1 / file:): throws on mismatch
+      (dashboard breaks loudly).
+    - prod (everywhere else, including github.io): logs
+      console.error with the missing keys + label; continues.
+  No staging tier — we ship straight to GitHub Pages.
+
+  Two instrumentation sites in v67:
+    - rpcCaseToInMemory(row): asserts the get_office_cases
+      return shape (16 keys per the deployed function
+      signature pasted in v36 transcript).
+    - hydrateCaseFromRpc(caseId): asserts the
+      get_case_with_parties top-level shape ({case, parties,
+      prepared_document}).
+
+  Helper is generic — usable by future RPC consumers in this
+  dashboard, and a copy is intended to land in admin v38 next
+  ship even though admin doesn't currently have a hydrator
+  surface (future-proof slot).
+
+  Side-finding logged in D001 notes: hydrateCaseFromRpc reads
+  payload.notes (line ~2540 in v66) but get_case_with_parties
+  does NOT return a 'notes' top-level key. The c.notes_full
+  fallback to [] silently masks this. Not patched in v67 —
+  flagged for D001 closure work.
+
+  Touched:
+    - One new helper: assertShape() near top of script block.
+    - One new constant block: EXPECTED_RPC_SHAPES with the two
+      shape declarations.
+    - Two assertion calls (one per hydrator entry).
+
+  Untouched: every render call site, every other RPC consumer,
+  every existing in-memory key name. Net delta: ~+50 lines / 0
+  removed. Rollback target: notariat_dashboard_v66.html.
+
   ───────────────────────────────────────────────────────────────
   v65 → v66 changelog (B27 follow-up — Descarcă button wiring):
 
@@ -2374,6 +2420,70 @@ const CASES = [];
 // stub for MVP. Empty array means C.I.-only case (Alte documente button hidden).
 function getCaseDocs(caseId){ return []; }
 
+// ══ RPC SHAPE CONTRACT (v67 — D001 mitigation) ═══════════════════════════════════════════
+// Generic runtime assertion helper. Catches *missing keys* in RPC payloads loudly so the
+// silent-fallthrough drift class (a renamed/dropped RPC field becoming undefined in memory)
+// fires on first dev load instead of weeks later when a UI bug surfaces.
+//
+// Tier behavior driven by hostname:
+//   - DEV  (localhost / 127.0.0.1 / file:): throws — dashboard breaks loudly.
+//   - PROD (everything else, including github.io): console.error + continue.
+//
+// Limitations (recorded in Section 18 D001):
+//   - Catches missing keys only. Does NOT catch type drift (string→uuid) or value-shape
+//     drift (object→array). Does NOT catch renames where a *different* key is present.
+//   - The expected-keys lists below must be updated whenever an RPC return signature
+//     changes (Directive 11.7 already requires master orchestration of schema changes —
+//     this list is the dashboard-side artifact of that contract).
+function isDevHost(){
+  var h = (typeof location !== 'undefined' && location.hostname) ? location.hostname : '';
+  if (h === 'localhost' || h === '127.0.0.1' || h === '') return true;
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return true;
+  return false;
+}
+function assertShape(payload, expectedKeys, label){
+  // Returns array of missing keys (empty = pass). On mismatch: throws in dev, console.errors in prod.
+  if (payload === null || typeof payload !== 'object') {
+    var nullMsg = '[assertShape] ' + label + ': payload is not an object (got ' + (payload === null ? 'null' : typeof payload) + ')';
+    if (isDevHost()) throw new Error(nullMsg);
+    console.error(nullMsg);
+    return expectedKeys.slice();
+  }
+  var missing = [];
+  for (var i = 0; i < expectedKeys.length; i++) {
+    var k = expectedKeys[i];
+    if (!(k in payload)) missing.push(k);
+  }
+  if (missing.length > 0) {
+    var msg = '[assertShape] ' + label + ': missing keys: ' + missing.join(', ');
+    if (isDevHost()) throw new Error(msg);
+    console.error(msg, { payload: payload, expected: expectedKeys, missing: missing });
+  }
+  return missing;
+}
+
+// Expected RPC return shapes. Update whenever the deployed RPC signature changes.
+// Source of truth: pg_get_functiondef(<rpc>::regclass) — paste into v36+ transcripts on update.
+var EXPECTED_RPC_SHAPES = {
+  // get_office_cases — verified against v36 transcript paste (2026-05-10):
+  //   RETURNS TABLE(id, ref, act_type, subtype_key, subtype_label_ro, status_ui,
+  //                 client_name, client_email, client_phone, created_at, preferred_at,
+  //                 preferred_interval, booked_at, has_prepared_doc, has_unread_disc, notes_excerpt)
+  // 16 keys. The hydrator rpcCaseToInMemory() consumes a subset and renames several
+  // (act_type → c.type, ref → c.ref [no rename — RPC already aliases case_ref AS ref],
+  // notes_excerpt → c.notes). D001 captures the rename debt.
+  get_office_cases_row: [
+    'id', 'ref', 'act_type', 'subtype_key', 'subtype_label_ro', 'status_ui',
+    'client_name', 'client_email', 'client_phone', 'created_at', 'preferred_at',
+    'preferred_interval', 'booked_at', 'has_prepared_doc', 'has_unread_disc', 'notes_excerpt'
+  ],
+  // get_case_with_parties — verified against get_case_with_parties_v2_b22.sql:
+  //   Returns jsonb_build_object('case', ..., 'parties', ..., 'prepared_document', ...)
+  // 3 top-level keys. Note: hydrateCaseFromRpc also reads payload.notes — that key is
+  // NOT returned by the RPC (silent undefined → c.notes_full = []). Flagged for D001 closure.
+  get_case_with_parties_payload: ['case', 'parties', 'prepared_document']
+};
+
 // ══ LIVE LOADERS (Phase 4c.6) ═══════════════════════════════════════════════════════════
 // Single Romanian month-short array used by stamp formatting; matches RO_M_SHORT defined above.
 // (RO_M_SHORT exists at the top of this script.)
@@ -2383,6 +2493,8 @@ function getCaseDocs(caseId){ return []; }
 // buttons + count tiles + chart legend.
 // Per master Q1: c.hist starts empty; optimistic push happens at transition success sites.
 function rpcCaseToInMemory(row){
+  // v67 — D001 mitigation: assert RPC return shape on entry.
+  assertShape(row, EXPECTED_RPC_SHAPES.get_office_cases_row, 'get_office_cases row');
   // Status arrives in dashboard vocab (status_ui) per prep contract Section 1.
   var statusUi = row.status_ui || 'nou';
   // Best-effort act label for case rows: subtype_label_ro if present (Romanian, specific),
@@ -2503,6 +2615,8 @@ function rpcPartyToInMemory(p){
 function hydrateCaseFromRpc(caseId){
   return rpc('get_case_with_parties', { p_case_id: caseId }).then(function(payload){
     if (!payload) return null;
+    // v67 — D001 mitigation: assert RPC payload shape after null guard.
+    assertShape(payload, EXPECTED_RPC_SHAPES.get_case_with_parties_payload, 'get_case_with_parties payload');
     var c = CASES.find(function(x){ return x.id === caseId; });
     if (!c) return null;
     // Merge case-level fields the case row didn't carry (or that may be more current).
