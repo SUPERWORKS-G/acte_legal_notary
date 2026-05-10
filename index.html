@@ -4173,7 +4173,7 @@ function downloadCi(){
     return;
   }
   showToast('Descărcare CI…');
-  callEdgeFunction('get-upload-signed-url', { case_id: currentCiCaseId, role: 'semnatar' }).then(function(data){
+  callEdgeFunction('get-upload-signed-url', { case_id: currentCiCaseId, role: 'semnatar', download: true }).then(function(data){
     if(!data || !data.signed_url){ throw new Error('no signed_url'); }
     var a=document.createElement('a');
     a.href=data.signed_url;
