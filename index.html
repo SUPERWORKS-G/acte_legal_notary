@@ -1,6 +1,84 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v64 · CANONICAL
+  acte.legal — Dashboard v65 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v64 → v65 changelog (B27 — CI image preview wiring):
+
+  B27 — the 'Verificare act de identitate' modal rendered a
+  hardcoded placeholder div ('CI încărcat de client · imagine ·
+  PDF' over a black .ci-img-pane background) instead of the
+  client-uploaded CI file. The render path was never implemented:
+  openCI populated only the fields-edit pane, never touched
+  ci-img-pane. The black box George was seeing in production was
+  the placeholder div with background:var(--ink). Bug existed
+  since the dashboard was first wired.
+
+  Fix: master shipped get-upload-signed-url Edge Function at v34
+  (JWT-on, 300s TTL, office-scoped via RLS, mirrors
+  get-prepared-doc-signed-url's auth + CORS pattern). v65 wires
+  openCI to call it and replace the placeholder with the actual
+  CI render.
+
+  Three new helpers:
+    - renderCiPreview(url, contentType, filename) — appends <img>
+      for images, <embed type=application/pdf> for PDFs. PDF
+      detection is content-type primary, filename .pdf check
+      fallback. Image fits with maxWidth/maxHeight + object-fit
+      contain.
+    - renderCiPaneError(msg) — replaces pane with mono '⚠ CI
+      indisponibil — încearcă din nou —' inline message. Matches
+      the .ci-img-placeholder styling.
+    - renderCiPaneLoading() — replaces pane with mono '○ Se
+      încarcă…' state. Called synchronously inside openCI so
+      re-opens never flash the previous case's image while the
+      new EF call is in flight.
+
+  openCI itself: 7-line block inserted at the top (after 'c' is
+  found). renderCiPaneLoading() runs synchronously, then
+  callEdgeFunction('get-upload-signed-url', { case_id, role:
+  'semnatar' }) kicks off in parallel with field-rendering DOM
+  construction. Resolves to renderCiPreview on success or
+  renderCiPaneError on any failure (network error, no upload,
+  office mismatch, etc).
+
+  Security note: signed URL has a 300s TTL and is fetched fresh
+  per modal-open. Never cached on c.* (matches the v60 B21
+  discipline for get-prepared-doc-signed-url). RLS in the EF
+  enforces office isolation server-side; frontend-side a
+  case_not_found_or_no_access response surfaces as the inline
+  error state.
+
+  MVP scope: semnatar role only. Multi-party cases (Vanzare
+  imobil with vanzator + cumparator, etc.) are B28 — detail
+  panel adapts to act type then. Cases with no semnatar role get
+  EF response 'no_upload_for_role' which renders the inline
+  error state. Acceptable until B28.
+
+  Touched:
+    - 3 new helpers (renderCiPreview, renderCiPaneError,
+      renderCiPaneLoading) inserted above openCI.
+    - openCI: 7-line fetch+render block inserted at function
+      top, after 'c' is resolved. No other body changes.
+
+  Untouched: the static placeholder HTML at line 1564 (replaced
+  at runtime now, but stays in markup as the initial paint
+  before the first openCI), the CI-discrepancy logic, the ci
+  fields-edit pane, the modal show/hide, closeCI, ciMarkDirty,
+  and the unrelated doc-modal (#doc-overlay / #doc-modal).
+
+  Out of scope (logged for later):
+    - B28: multi-party CI display with role tabs.
+    - B30 (potential): Other-documents modal may have the same
+      placeholder-only bug. Investigate after B28.
+
+  Audit invariants (v64 → v65): no new async/await, no new
+  backticks (banner-text only), no new ids, one new selector
+  pattern (document.getElementById('ci-img-pane') used by all
+  three new helpers — reads only, no mutation outside the
+  innerHTML reset). Net delta: +66 lines / 0 lines removed in
+  the openCI region. Rollback target:
+  notariat_dashboard_v64.html.
+
   ───────────────────────────────────────────────────────────────
   v63 → v64 changelog (N036 — reschedule RPC routing + smart label):
 
@@ -4037,9 +4115,83 @@ function refreshStatusVisuals(c){
 
 // ══ CI MODAL ══
 let currentOpenCase=null;
+// ══ v65 (B27) — CI image preview. Backend get-upload-signed-url EF (deployed
+// v34 master, JWT-on, office-scoped, 300s TTL) returns a signed URL for the
+// case's uploaded CI file by role. Frontend was never wired — modal showed a
+// hardcoded placeholder forever. renderCiPreview replaces the pane contents
+// with <img> for images / <embed> for PDFs. Errors render a clear inline
+// message rather than the black void.
+//
+// TTL is 300s; URL is fetched per modal-open, never cached on c.* (matches
+// the get-prepared-doc-signed-url discipline shipped in v60 B21).
+//
+// MVP scope: semnatar role only. Multi-party (vanzator/cumparator etc.) is
+// B28's job — detail panel adapts to act type then.
+function renderCiPreview(url, contentType, filename){
+  var pane = document.getElementById('ci-img-pane');
+  if(!pane) return;
+  pane.innerHTML = '';
+  var lower = (filename || '').toLowerCase();
+  var isPdf = (contentType === 'application/pdf') || (lower.indexOf('.pdf') !== -1);
+  if(isPdf){
+    var embed = document.createElement('embed');
+    embed.src = url;
+    embed.type = 'application/pdf';
+    embed.style.width = '100%';
+    embed.style.height = '100%';
+    pane.appendChild(embed);
+  } else {
+    var img = document.createElement('img');
+    img.src = url;
+    img.alt = filename || 'CI';
+    img.style.maxWidth = '100%';
+    img.style.maxHeight = '100%';
+    img.style.objectFit = 'contain';
+    pane.appendChild(img);
+  }
+}
+
+// Render an inline error state in the CI pane. Replaces the placeholder div
+// (and any previously-rendered image) when the EF call fails. Mono styling
+// matches the existing .ci-img-placeholder convention.
+function renderCiPaneError(msg){
+  var pane = document.getElementById('ci-img-pane');
+  if(!pane) return;
+  pane.innerHTML =
+    '<div class="ci-img-placeholder">'
+    + '<div style="font-size:32px;margin-bottom:12px;opacity:0.3;">⚠</div>'
+    + '<div>' + (msg || 'CI indisponibil') + '</div>'
+    + '<div style="opacity:0.5;margin-top:4px;">— încearcă din nou —</div>'
+    + '</div>';
+}
+
+// Render a loading state in the CI pane. Used as the synchronous reset on
+// every openCI so a re-open never flashes the previous case's image while
+// the new EF call is in flight.
+function renderCiPaneLoading(){
+  var pane = document.getElementById('ci-img-pane');
+  if(!pane) return;
+  pane.innerHTML =
+    '<div class="ci-img-placeholder">'
+    + '<div style="font-size:32px;margin-bottom:12px;opacity:0.3;">○</div>'
+    + '<div>Se încarcă…</div>'
+    + '</div>';
+}
+
 function openCI(caseId){
   var c=CASES.find(function(x){return x.id===caseId;});
   if(!c)return;
+  // ══ v65 (B27) — Fetch + render the CI image. Synchronous reset to a
+  // loading state first so re-opens don't flash the previous case. Fresh
+  // signed URL per open — TTL is 300s, never cached on c.*.
+  renderCiPaneLoading();
+  callEdgeFunction('get-upload-signed-url', { case_id: c.id, role: 'semnatar' }).then(function(data){
+    if(!data || !data.signed_url){ throw new Error('no signed_url'); }
+    renderCiPreview(data.signed_url, data.content_type, data.filename);
+  }).catch(function(err){
+    console.error('[openCI:get-upload-signed-url]', err);
+    renderCiPaneError('CI indisponibil');
+  });
   var hasDisc=c.disc&&c.disc.length>0;
   var html='';
   if(c.parties){c.parties.forEach(function(p,pIdx){
