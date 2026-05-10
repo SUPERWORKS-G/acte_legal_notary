@@ -1,6 +1,60 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v68 · CANONICAL · history reverse-chronological 2026-05-10
+  acte.legal — Dashboard v69 · CANONICAL · B28 Ship 3 RPC-driven field manifests 2026-05-10
+  ───────────────────────────────────────────────────────────────
+  v68 → v69 changelog (B28 Ship 3 — field manifests from DB):
+
+  FIELD_REQUIREMENTS mock retained as fallback; legalizare_semnatura
+  (and any subtype with seeded rows in subtype_field_requirements)
+  now drives slot-state from RPC `get_field_requirements_for_case`.
+  Subtypes with no seed rows fall through to the static mock — same
+  visual behavior as v68 for those. Effectively: legalizare_semnatura
+  is now DB-driven; everything else is mock-driven (Ship 4 backfills).
+
+  Wiring:
+    - hydrateCaseFromRpc adds a parallel call to get_field_requirements_for_case
+      after get_case_with_parties resolves. Result cached on c.fieldRequirementsByRole
+      keyed by role slug → field label → 'required' | 'optional' | 'hidden'.
+    - 'hidden' is encoded as "field absent from seed" (RPC returns nothing
+      for hidden fields). Cache walker flags any field NOT in the RPC result
+      as 'hidden' for that (role × subtype) — but ONLY if the RPC returned
+      ANY rows for that role. If RPC returned zero rows for the role,
+      cache is left untouched and mock fallback applies.
+    - fieldRequirement signature changed: (subtype, role, fieldLabel)
+      becomes (c, role, fieldLabel). Two callers in render: renderPartyFields
+      filter + renderField slot-state. Both updated to pass c.
+    - renderParties → renderPartyFields → renderField now thread `c`
+      (the case object) instead of c.subtype. role is still passed
+      separately because it's per-party.
+    - role-slug mapping: RPC returns p.role machine slug ('semnatar',
+      'mandant'). Cache keyed by slug. fieldRequirement reads p.role_key
+      (not the display label p.role) when looking up the cache.
+    - field-key mapping: RPC returns field_key column ('full_name',
+      'cnp', 'address'). Cache walker translates via reverse-REG_TO_COL
+      back to Romanian display labels (the keys mock uses).
+    - On RPC failure: console.error, leave cache empty, mock-fallback
+      runs as if RPC was never called. Soft-fail principle (matches
+      admin v37's get_extras_for_subtype handling).
+
+  Smoke targets:
+    - AL-2026-0031 + AL-2026-0032 (both legalizare_semnatura) — should
+      show exactly the 9 seeded fields per role, no more.
+    - Any non-legalizare_semnatura case (when one exists) — should
+      render identically to v68 (mock-fallback).
+
+  Rollback target: v68 (revert this changelog block + 4 patch sites
+  in this file). Mock dictionaries (FIELD_REQUIREMENTS / EXTRA_FIELDS_CONFIG)
+  preserved unchanged — Ship 4 retires them after seed backfill.
+
+  Section 18 D001 status unchanged: the hydrator-rename smell remains;
+  Ship 3 leaves the renamed-fields-in-memory shape in place. D001
+  closure later folds Ship 3's cache key (display labels) into whatever
+  canonical shape the rename refactor lands on.
+
+  EXTRA_FIELDS_CONFIG mock untouched. Subtype extras are a separate
+  layer (per v35 Section 7.2 open question — discriminator column or
+  separate table). Will revisit at Ship 4 or post-launch.
+
   ───────────────────────────────────────────────────────────────
   v67 → v68 changelog (UX polish — ISTORIC ordering):
 
@@ -2041,11 +2095,32 @@ var FIELD_REQUIREMENTS = {
   'Copie':                 { Semnatar: { 'Stare civilă': 'hidden', 'Cetățenie': 'hidden', 'Locul nașterii': 'hidden', 'Data nașterii': 'optional' } }
 };
 
-// Lookup: returns 'required' | 'optional' | 'hidden' for (subtype, role, fieldLabel)
-function fieldRequirement(subtype, role, fieldLabel){
+// Lookup: returns 'required' | 'optional' | 'hidden' for (case, role, fieldLabel).
+// v69 (B28 Ship 3) — DB-driven via c.fieldRequirementsByRole cache when populated;
+// mock fallback (FIELD_REQUIREMENTS) when no RPC rows exist for this role.
+//
+// Cache shape: c.fieldRequirementsByRole = { '<role_slug>': { '<fieldLabel>': '<state>' } }.
+// Built by hydrateCaseFromRpc from get_field_requirements_for_case. If RPC returned ANY rows
+// for the role, the cache is authoritative — fields NOT present in the seed are 'hidden'
+// (per Ship 4 spec: absence from seed = hidden). If no rows for the role, fall back to mock.
+//
+// `role` here is the RPC role slug ('semnatar', 'mandant'). renderField passes p.role_key.
+function fieldRequirement(c, roleSlug, fieldLabel){
+  // DB cache path
+  if (c && c.fieldRequirementsByRole) {
+    var cacheForRole = c.fieldRequirementsByRole[roleSlug];
+    if (cacheForRole) {
+      // Role has seeded rows in DB — cache is authoritative.
+      // Field present in cache → its seeded state. Field absent → 'hidden' (Ship 4 spec).
+      return cacheForRole[fieldLabel] || 'hidden';
+    }
+  }
+  // Mock fallback — same logic as v68. Mock keys by Romanian subtype label, role display label.
+  var subtype = c ? c.subtype : '';
+  var roleDisplay = roleLabelRo(roleSlug); // map slug → display label for mock lookup
   var s = FIELD_REQUIREMENTS[subtype];
   if(!s) return FIELD_REQUIREMENTS_DEFAULT;
-  var r = s[role];
+  var r = s[roleDisplay] || s[roleSlug]; // tolerate either key shape on the mock
   if(!r) return FIELD_REQUIREMENTS_DEFAULT;
   return r[fieldLabel] || FIELD_REQUIREMENTS_DEFAULT;
 }
@@ -2623,6 +2698,45 @@ function rpcPartyToInMemory(p){
   };
 }
 
+// v69 (B28 Ship 3) — build the per-case field-requirements cache from
+// get_field_requirements_for_case rows. RPC returns:
+//   { role: '<slug>', field_key: '<column>', is_required: bool, display_order: int }
+// Cache produced:
+//   { '<role_slug>': { '<Romanian field label>': 'required' | 'optional' } }
+// Note: the RPC contract has no 'hidden' state — hidden = absent from seed.
+// fieldRequirement() handles that by returning 'hidden' for any field NOT
+// in cacheForRole when cacheForRole exists.
+//
+// field_key → Romanian label: reverse of REG_TO_COL (defined inside
+// rpcPartyToInMemory). Kept as a separate constant here so fieldRequirement
+// doesn't need to scope into another function. Must stay in sync with
+// REG_TO_COL above.
+var FIELD_KEY_TO_LABEL = {
+  'name':           'Nume complet',
+  'full_name':      'Nume complet',
+  'cnp':            'CNP',
+  'id_series':      'Serie C.I.',
+  'id_number':      'Număr C.I.',
+  'id_issuer':      'Emis de',
+  'id_issue_date':  'Data emiterii',
+  'birth_place':    'Locul nașterii',
+  'birth_date':     'Data nașterii',
+  'citizenship':    'Cetățenie',
+  'marital_status': 'Stare civilă',
+  'address':        'Domiciliu'
+};
+function buildFieldRequirementsCache(rows){
+  var cache = {};
+  rows.forEach(function(r){
+    var roleSlug = r.role || '';
+    var label = FIELD_KEY_TO_LABEL[r.field_key];
+    if (!roleSlug || !label) return; // unknown role or unknown field_key → skip
+    if (!cache[roleSlug]) cache[roleSlug] = {};
+    cache[roleSlug][label] = r.is_required ? 'required' : 'optional';
+  });
+  return cache;
+}
+
 // Hydrate the open case in-place with parties + notes from get_case_with_parties.
 // Returns a Promise. Caller should call populateView/refreshStatusVisuals after resolve.
 function hydrateCaseFromRpc(caseId){
@@ -2665,7 +2779,17 @@ function hydrateCaseFromRpc(caseId){
     }
     c.parties = (payload.parties || []).map(rpcPartyToInMemory);
     c.notes_full = payload.notes || [];           // raw notes array (used by saveNotes refresh)
-    return c;
+    // v69 (B28 Ship 3) — fetch field manifest from DB and build cache for fieldRequirement().
+    // Cache shape: c.fieldRequirementsByRole = { '<role_slug>': { '<fieldLabel>': '<state>' } }.
+    // RPC returns rows for seeded subtypes only. Soft-fails on error (mock fallback applies).
+    return rpc('get_field_requirements_for_case', { p_case_id: caseId }).then(function(rows){
+      c.fieldRequirementsByRole = buildFieldRequirementsCache(rows || []);
+      return c;
+    }).catch(function(err){
+      console.error('[get_field_requirements_for_case]', err);
+      c.fieldRequirementsByRole = {}; // empty cache → mock fallback in fieldRequirement()
+      return c;
+    });
   }).catch(function(err){
     console.error('[hydrateCaseFromRpc]', err);
     if (typeof showToast === 'function') showToast('Eroare la încărcarea dosarului');
@@ -2918,25 +3042,27 @@ let currentFilter='toate',currentView=localStorage.getItem('notariat_view')||'a'
 
 // ══ RENDERERS ══
 
-// Render a single party group — slot-state logic per FIELD_REQUIREMENTS (v50)
+// Render a single party group — slot-state logic per fieldRequirement (DB-cached → mock fallback).
+// v69 (B28 Ship 3): signature now takes `c` (case) + `roleSlug` instead of (subtype, roleDisplay).
+// roleSlug is the RPC machine slug (p.role_key); fieldRequirement uses it for cache lookup.
 // Hidden fields are omitted entirely. Empty + required → subtle warning dot. Empty + optional → "—".
-function renderPartyFields(fields, subtype, role){
+function renderPartyFields(fields, c, roleSlug){
   // Filter out hidden slots up front; keep input field order (already sorted to FIELD_REGISTRY canonical order)
   var visible = fields.filter(function(f){
-    return fieldRequirement(subtype, role, f.l) !== 'hidden';
+    return fieldRequirement(c, roleSlug, f.l) !== 'hidden';
   });
   var pairs=[];
   for(var i=0;i<visible.length;i+=2){
     if(i+1<visible.length){
-      pairs.push('<div class="field-grid-2">'+renderField(visible[i], subtype, role)+renderField(visible[i+1], subtype, role)+'</div>');
+      pairs.push('<div class="field-grid-2">'+renderField(visible[i], c, roleSlug)+renderField(visible[i+1], c, roleSlug)+'</div>');
     } else {
-      pairs.push(renderField(visible[i], subtype, role));
+      pairs.push(renderField(visible[i], c, roleSlug));
     }
   }
   return pairs.join('');
 }
-function renderField(f, subtype, role){
-  var req = fieldRequirement(subtype, role, f.l);
+function renderField(f, c, roleSlug){
+  var req = fieldRequirement(c, roleSlug, f.l);
   var isEmpty = !f.v;
   var monoClass = f.m ? ' mono' : '';
   var emptyClass = isEmpty ? ' empty' : '';
@@ -2963,12 +3089,14 @@ function renderField(f, subtype, role){
 }
 
 // Render all parties with role tags + universal fields + extras block (v50 Change 3)
+// v69 (B28 Ship 3): renderPartyFields now takes (fields, c, roleSlug) instead of (fields, subtype, role).
+// p.role_key is the RPC machine slug used for DB-cache lookup; p.role is the display label.
 function renderParties(c){
   if(!c.parties||!c.parties.length)return '';
   return c.parties.map(function(p){
     var roleTag=c.parties.length>1?'<div class="tag-role">'+p.role+'</div>':'';
     return roleTag
-      + renderPartyFields(p.fields, c.subtype, p.role)
+      + renderPartyFields(p.fields, c, p.role_key || '')
       + renderExtraFields(p, c.subtype);
   }).join('');
 }
