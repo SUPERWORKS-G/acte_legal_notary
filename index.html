@@ -1,8 +1,17 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v69 · CANONICAL · B28 Ship 3 RPC-driven field manifests 2026-05-10
+  acte.legal — Dashboard v69 · CANONICAL · B28 Ship 3 RPC-driven field manifests + Nume complet fix 2026-05-10
   ───────────────────────────────────────────────────────────────
   v68 → v69 changelog (B28 Ship 3 — field manifests from DB):
+
+  Bonus latent-bug fix surfaced by Ship 3 smoke:
+  rpcCaseToInMemory's REG_TO_COL mapped 'Nume complet' → 'name', but
+  case_parties column is actually 'full_name'. Result: every Nume
+  complet field rendered as empty in v68 (and earlier). Pre-existing
+  drift, not introduced by Ship 3. One-line fix; mock + DB paths both
+  benefit.
+
+  Ship 3 itself:
 
   FIELD_REQUIREMENTS mock retained as fallback; legalizare_semnatura
   (and any subtype with seeded rows in subtype_field_requirements)
@@ -2659,7 +2668,7 @@ function rpcPartyToInMemory(p){
   // (universal) name, cnp, id_series, id_number, id_issuer, id_issue_date,
   //             birth_place, birth_date, citizenship, marital_status, address
   var REG_TO_COL = {
-    'Nume complet':   'name',
+    'Nume complet':   'full_name',
     'CNP':            'cnp',
     'Serie C.I.':     'id_series',
     'Număr C.I.':     'id_number',
