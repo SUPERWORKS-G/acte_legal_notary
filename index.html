@@ -1,6 +1,46 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v65 · CANONICAL
+  acte.legal — Dashboard v66 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v65 → v66 changelog (B27 follow-up — Descarcă button wiring):
+
+  In v65 the CI modal's '↓ Descarcă' button was a placeholder
+  stub: onclick fired showToast('Descărcare CI…') with no actual
+  download. View-side worked (renderCiPreview), download-side
+  did nothing. v66 wires it.
+
+  Master direct ship per Directive 11.29 — small isolated
+  frontend slice (~25 lines), notary chat parked, conditions
+  match (same EF as v65, same auth pattern, locally testable).
+
+  Touched:
+    - One new module-level var: currentCiCaseId, set inside
+      openCI, cleared inside closeCI. Needed because the
+      modal had no state telling Descarcă which case is open.
+    - One new function: downloadCi(). Calls
+      get-upload-signed-url (same EF as the view path), then
+      triggers a browser download via a temporary <a download>
+      anchor with the signed URL. ES5 + Promises, no
+      async/await, no backticks. Error path reuses the
+      existing showToast convention.
+    - Button rewire: line ~1636
+      onclick='showToast(...)' → onclick='downloadCi()'.
+
+  Why same EF: the signed URL minted by get-upload-signed-url
+  is good for both inline view (img.src) AND download (anchor
+  download). No new backend needed. TTL 300s, fresh per click,
+  never cached.
+
+  Untouched: openCI body (other than adding the
+  currentCiCaseId set), renderCiPreview, renderCiPaneError,
+  renderCiPaneLoading, the field-edit pane, CI discrepancy
+  logic, doc-modal (B30 territory).
+
+  Audit invariants (v65 → v66): no new async/await, no new
+  backticks, one new id-less variable, one new function. Net
+  delta: ~+25 lines / 0 removed. Rollback target:
+  notariat_dashboard_v65.html.
+
   ───────────────────────────────────────────────────────────────
   v64 → v65 changelog (B27 — CI image preview wiring):
 
@@ -1633,7 +1673,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
   <div class="ci-modal-hdr">
     <span class="ci-modal-title">Verificare act de identitate</span>
     <div class="ci-modal-actions">
-      <button class="ci-download-btn" onclick="showToast('Descărcare CI…')">↓ Descarcă</button>
+      <button class="ci-download-btn" onclick="downloadCi()">↓ Descarcă</button>
       <button class="close-btn" onclick="closeCI()">−</button>
     </div>
   </div>
@@ -4118,6 +4158,36 @@ let currentOpenCase=null;
 // ══ v65 (B27) — CI image preview. Backend get-upload-signed-url EF (deployed
 // v34 master, JWT-on, office-scoped, 300s TTL) returns a signed URL for the
 // case's uploaded CI file by role. Frontend was never wired — modal showed a
+// ══ v66 (B27 follow-up) — Descarcă button wiring ══
+// Tracks which case the CI modal is open for, so the Descarcă button knows
+// what to download. Set inside openCI, cleared inside closeCI.
+var currentCiCaseId=null;
+
+// Triggers a browser download of the CI for the currently-open case. Uses
+// the same get-upload-signed-url EF as the view path; the signed URL is
+// good for both inline rendering and download (anchor download attribute).
+// Fresh URL per click, never cached. ES5 + Promises only.
+function downloadCi(){
+  if(!currentCiCaseId){
+    showToast('Nicio CI deschisă');
+    return;
+  }
+  showToast('Descărcare CI…');
+  callEdgeFunction('get-upload-signed-url', { case_id: currentCiCaseId, role: 'semnatar' }).then(function(data){
+    if(!data || !data.signed_url){ throw new Error('no signed_url'); }
+    var a=document.createElement('a');
+    a.href=data.signed_url;
+    a.download=data.filename || 'ci';
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }).catch(function(err){
+    console.error('[downloadCi:get-upload-signed-url]', err);
+    showToast('Descărcare eșuată');
+  });
+}
+
 // hardcoded placeholder forever. renderCiPreview replaces the pane contents
 // with <img> for images / <embed> for PDFs. Errors render a clear inline
 // message rather than the black void.
@@ -4181,6 +4251,7 @@ function renderCiPaneLoading(){
 function openCI(caseId){
   var c=CASES.find(function(x){return x.id===caseId;});
   if(!c)return;
+  currentCiCaseId=c.id;
   // ══ v65 (B27) — Fetch + render the CI image. Synchronous reset to a
   // loading state first so re-opens don't flash the previous case. Fresh
   // signed URL per open — TTL is 300s, never cached on c.*.
@@ -4242,6 +4313,7 @@ function closeCI(){
   document.getElementById('ci-overlay').classList.remove('show');
   document.getElementById('ci-modal').classList.remove('show');
   document.body.style.overflow='';
+  currentCiCaseId=null;
 }
 
 // ══ DOCUMENTE MODAL (v43) ══
