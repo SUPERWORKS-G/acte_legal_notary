@@ -1,6 +1,19 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v67 · CANONICAL · assertShape instrumentation 2026-05-10
+  acte.legal — Dashboard v68 · CANONICAL · history reverse-chronological 2026-05-10
+  ───────────────────────────────────────────────────────────────
+  v67 → v68 changelog (UX polish — ISTORIC ordering):
+
+  ISTORIC entries now render newest-first (reverse-chronological).
+  Previously rendered in c.hist array order (oldest → newest top-down,
+  newest at bottom). User feedback during smoke: latest event should
+  be at top. Fixed at render site only — c.hist storage order unchanged
+  (still push-append for simplicity at write sites).
+
+  One-line change: hist render now does `.slice().reverse().map(...)`
+  instead of `.map(...)`. .slice() copies first to avoid mutating the
+  source array (which would flip order on every re-render).
+
   ───────────────────────────────────────────────────────────────
   v66 → v67 changelog (D001 mitigation — runtime RPC shape contract):
 
@@ -3555,7 +3568,7 @@ function populateView(prefix,c,preserveScroll){
   // (Live updates wired once at page load via input listeners — see updateConfirmBtnState.)
   updateConfirmBtnState(prefix);
   if(document.getElementById(prefix+'-notes'))document.getElementById(prefix+'-notes').value=c.notes;
-  document.getElementById(prefix+'-hist').innerHTML=c.hist.map(function(h){return '<div class="hist-item">'+h+'</div>';}).join('');
+  document.getElementById(prefix+'-hist').innerHTML=c.hist.slice().reverse().map(function(h){return '<div class="hist-item">'+h+'</div>';}).join('');
   // ══ Comms panel — read-only sent-email log. Loaded async via get_case_email_log.
   renderCommsPanel(prefix, c);
 
