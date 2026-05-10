@@ -1,6 +1,128 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v62 · CANONICAL
+  acte.legal — Dashboard v64 · CANONICAL
+  ───────────────────────────────────────────────────────────────
+  v63 → v64 changelog (N036 — reschedule RPC routing + smart label):
+
+  N036 — the dashboard had a single button labelled 'Confirmă
+  programarea →' that called confirm_case_booking on every click,
+  for both first-time scheduling AND any subsequent reschedule.
+  confirm_case_booking enforces a submitted → in_review status
+  transition; calling it on a case already in_review or booked
+  raised inside validate_status_transition and surfaced as a
+  generic 'Confirmarea a eșuat — reîncearcă' toast. The reschedule
+  path was silently broken since the dashboard was first wired —
+  notaries who tried to update an appointment's date/time got a
+  failure toast and no email, with no diagnostic surface. The
+  picker's V50 banner comment ('idempotency-aware
+  confirm_case_booking') referenced an idempotency layer that
+  never landed in production.
+
+  Fix: master shipped reschedule_case_booking RPC at v33 (updates
+  scheduled_at only, status stays put, fires case_rescheduled
+  email, audit-logs both old and new timestamps). v64 wires the
+  dashboard to it. Two surfaces:
+
+    (1) Smart label. The button text is set in populateView right
+        next to the existing finalizat-show-hide gate — same
+        confirmActionEl, same status discriminator. 'Programează
+        →' for status='nou' (never been scheduled), 'Reprogramează
+        →' for any non-nou (case has a committed datetime).
+        finalizat is hidden entirely so the label there is moot.
+
+    (2) RPC routing. confirmProgramare's existing wasNou check
+        already discriminates first-confirm from reschedule for
+        the optimistic-UI branch (status flip + history wording).
+        v64 reuses the same wasNou to pick the RPC name —
+        confirm_case_booking when wasNou, reschedule_case_booking
+        otherwise. Single source of truth for the dispatch
+        condition.
+
+  Note on hint mismatch: master's patch request suggested gating
+  on c.scheduled_at, but the in-memory case object doesn't carry
+  that field — the booked datetime lands as c.date + c.time via
+  hydrateCaseFromRpc's adapter (lines 2236-2237). Status-based
+  discrimination is the existing convention (confirm-readout at
+  line 3218, prefBox dimming at 3193, et al). Patch request
+  explicitly authorized 'use the equivalent if the case shape
+  differs' — wasNou is the equivalent.
+
+  Toast wording polish: reschedule success toast moved from
+  'Programare re-confirmată — clientul a fost notificat.' to
+  'Reprogramare confirmată — clientul a fost notificat.' Plain
+  noun is cleaner than the dash-prefixed verb.
+
+  Pre-flight: case_rescheduled template confirmed live in
+  email_templates (master + George v34). Email engine v3
+  deployed v34 with the 4 new globally-available tokens
+  (scheduled_weekday, scheduled_date_short, calendar_add_url,
+  office_map_url). Romanian locale via in-function lookup.
+
+  Touched:
+    - 3 button render sites (lines 1352, 1400, 1455): static
+      'Confirmă programarea →' text removed; populateView sets
+      it now.
+    - populateView (around v63 line 3199): label-set inserted
+      inside the existing confirmActionEl block.
+    - confirmProgramare (around v63 line 3893-3894): rpcName
+      computed from wasNou; rpc() call uses the variable.
+    - confirmProgramare reschedule-toast (around v63 line 3905):
+      wording polish.
+
+  Untouched: updateConfirmBtnState (disable-when-empty helper),
+  the picker, the auth/office-scope flow, the optimistic UI
+  status flip + history push, the audit log push to c.hist, all
+  non-confirm dashboard surfaces.
+
+  Audit invariants (v63 → v64): no new async/await, no new
+  backticks (banner-text only), no new ids, no new selectors
+  beyond the in-block .btn-confirm querySelector (cheap, runs
+  per-populateView). Net delta: +12 lines / -3 lines in
+  populateView + confirmProgramare. Rollback target:
+  notariat_dashboard_v63.html.
+
+  ───────────────────────────────────────────────────────────────
+  v62 → v63 changelog (B19.5 — picker timezone fix):
+
+  B19.5 — confirm-programarea picker was building scheduled_at via
+  `new Date(c.date + 'T' + c.time).toISOString()`. That parser
+  interprets the input in the BROWSER'S local timezone, which means
+  the same picked wall-clock time gets stored differently depending
+  on where the notary's machine is. A notary travelling in Hungary
+  (CEST = UTC+2) picking 14:00 stored 12:00 UTC = 15:00 Bucharest;
+  a notary in Romania (EEST = UTC+3) picking 14:00 stored 11:00 UTC
+  = 14:00 Bucharest. Storage was correct for the home case, broken
+  for any away case. Per Directive 11.17 client-facing time
+  rendering is locale-locked to Europe/Bucharest; this fix extends
+  the same lock to picker-side ingestion.
+
+  Fix: parse Y/M/D/H/M as integers, probe Bucharest's offset for
+  that exact moment via Intl.DateTimeFormat, subtract the offset
+  from the UTC probe, ship the resulting ISO. Locale-independent.
+  ES5 only, no async, no new backticks per Directive 11.2.
+
+  Touched: one block in the confirmCaseBooking handler (the
+  scheduled_at builder + the dtSuffix line that derived display
+  values from `localDt` in browser-local — now derives from the
+  parsed Y/M/D directly so the optimistic stamp also reflects
+  Bucharest semantics).
+
+  Diagnosis flow logged in v31 master log: surfaced via v30 magic
+  moment AL-2026-0028 .docx rendering 07:00 for a 09:00 pick.
+  Triaged in v31 — turned out to be three layers (.docx render
+  via toLocaleString defaulting UTC, email render via to_char with
+  no AT TIME ZONE, picker writing browser-local-ISO). All three
+  fixes shipped same session.
+
+  Out of scope: N034 label decomposition still pending. Also still
+  pending in v31: full smoke retest with this picker live (waiting
+  on user click after this ship).
+
+  Audit invariants (v62 → v63): no new async/await, no new
+  backticks, no new ids/selectors, no markup change. Net delta:
+  +30 lines / -3 lines in confirmCaseBooking handler.
+  Rollback: notariat_dashboard_v62.html.
+
   ───────────────────────────────────────────────────────────────
   v61 → v62 changelog (N052 dead-mock-strip + N054 height-sync race fix):
 
@@ -1307,7 +1429,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
             <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
             <div class="comms-host" id="va-comms"></div>
             <div id="va-status-sel"></div>
-            <div class="col-action" id="va-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
+            <div class="col-action" id="va-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()"></button></div>
           </div>
         </div>
       </div>
@@ -1355,7 +1477,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
             <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
             <div class="comms-host" id="vb-comms"></div>
             <div id="vb-status-sel"></div>
-            <div class="col-action" id="vb-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
+            <div class="col-action" id="vb-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()"></button></div>
           </div>
         </div>
       </div>
@@ -1410,7 +1532,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <div class="sub-lbl sub-lbl-spaced">Comunicări</div>
       <div class="comms-host" id="vc-comms"></div>
       <div id="vc-status-sel"></div>
-      <div class="col-action" id="vc-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()">Confirmă programarea →</button></div>
+      <div class="col-action" id="vc-confirm-action"><button class="btn-confirm" onclick="confirmProgramare()"></button></div>
     </div>
   </div>
 </div>
@@ -3158,6 +3280,14 @@ function populateView(prefix,c,preserveScroll){
   var confirmActionEl = document.getElementById(prefix+'-confirm-action');
   if(confirmActionEl){
     confirmActionEl.style.display = (c.status === 'finalizat') ? 'none' : '';
+    // ══ v64 (N036) — Smart label. 'Programează →' for first-time scheduling
+    // (status='nou'); 'Reprogramează →' once the case has been confirmed at
+    // least once (any non-nou status). Discriminator mirrors confirmProgramare's
+    // wasNou check — same condition, same RPC routing downstream.
+    var confirmBtnEl = confirmActionEl.querySelector('.btn-confirm');
+    if(confirmBtnEl){
+      confirmBtnEl.textContent = (c.status === 'nou') ? 'Programează →' : 'Reprogramează →';
+    }
   }
   var dateInpEl = document.getElementById(prefix+'-date');
   var timeInpEl = document.getElementById(prefix+'-time');
@@ -3849,7 +3979,14 @@ function confirmProgramare(){
                + ' ' + y + ' ' + c.time;
   var wasNou = (c.status === 'nou');
 
-  rpc('confirm_case_booking', { p_case_id: c.id, p_scheduled_at: scheduledAtIso }).then(function(){
+  // ══ v64 (N036) — RPC routing. confirm_case_booking enforces submitted→in_review
+  // (rejects if status is already in_review/booked); reschedule_case_booking updates
+  // scheduled_at only and fires case_rescheduled email. Same wasNou discriminator
+  // as the optimistic-UI branch below — single source of truth for "first-time vs
+  // reschedule" semantics.
+  var rpcName = wasNou ? 'confirm_case_booking' : 'reschedule_case_booking';
+
+  rpc(rpcName, { p_case_id: c.id, p_scheduled_at: scheduledAtIso }).then(function(){
     // Optimistic UI: flip status (if first-confirm) + push history stamp. Server is the source
     // of truth; the subsequent hydrateCaseFromRpc rebuilds parties/notes from authoritative state.
     if (wasNou) {
@@ -3860,7 +3997,7 @@ function confirmProgramare(){
     } else {
       c.hist = c.hist || [];
       c.hist.push(histStamp() + ' — reprogramat' + dtSuffix);
-      showToast('Programare re-confirmată — clientul a fost notificat.', 3500);
+      showToast('Reprogramare confirmată — clientul a fost notificat.', 3500);
     }
     refreshStatusVisuals(c);
     populateView(activePrefix, c, true);
