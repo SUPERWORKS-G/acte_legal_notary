@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.3 2026-05-12
+  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.4 2026-05-12
   ───────────────────────────────────────────────────────────────
   v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
 
@@ -2071,11 +2071,21 @@ var ROLE_LABELS_RO = {
   mandatar:      'MANDATAR',
   // declaratii (1)
   declarant:     'DECLARANT',
+  // declaratii ambii_parinti (v70 — duplicate-role disambiguation per D009/Ship 4)
+  parinte_1:     'PĂRINTE 1',
+  parinte_2:     'PĂRINTE 2',
+  parinte:       'PĂRINTE',
   // acorduri (2)
   parte_i:       'PARTE I',
   parte_ii:      'PARTE II',
-  // legalizari (1)
+  // acorduri new role slugs per manifest v2
+  proprietar_dominant:    'PROPRIETAR DOMINANT',
+  proprietar_aservit:     'PROPRIETAR ASERVIT',
+  proprietar_constructor: 'PROPRIETAR CONSTRUCTOR',
+  vecin:                  'VECIN',
+  // legalizari (1+1)
   semnatar:      'SEMNATAR',
+  solicitant:    'SOLICITANT',
   // imputerniciri (legacy — retired, kept for any leftover data)
   imputernicit:  'ÎMPUTERNICIT'
 };
@@ -2771,6 +2781,7 @@ function hydrateCaseFromRpc(caseId){
           var base = p.role_key;
           seen[base] = (seen[base] || 0) + 1;
           p.role_key = base + '_' + seen[base]; // parinte → parinte_1, parinte_2, ...
+          p.role     = roleLabelRo(p.role_key); // refresh display label with the new slug
         }
       });
     })();
