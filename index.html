@@ -1,6 +1,70 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v69 · CANONICAL · B28 Ship 3 RPC-driven field manifests + Nume complet fix 2026-05-10
+  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) 2026-05-12
+  ───────────────────────────────────────────────────────────────
+  v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
+
+  After v42 Ship 4 (server-side) landed all 209 rows in
+  subtype_field_requirements + 24 new rows in field_definitions, the
+  v69 mock dictionaries (FIELD_REQUIREMENTS, EXTRA_FIELDS_CONFIG) are
+  dead code. v70 retires them.
+
+  Changes:
+    1. FIELD_REQUIREMENTS dictionary deleted entirely.
+    2. FIELD_REQUIREMENTS_DEFAULT flipped 'required' → 'hidden'. New
+       semantics: any field NOT in the DB seed for this (subtype, role)
+       is hidden. This matches Ship 4 spec: absence-from-seed = hidden.
+    3. fieldRequirement(c, roleSlug, fieldLabel) simplified — mock
+       fallback branch removed. DB cache empty → return 'hidden'.
+    4. EXTRA_FIELDS_CONFIG dictionary deleted entirely.
+    5. extraFieldsFor signature change: (subtype, role) → (c, role).
+       Reads from c.extraFieldsByRole cache (DB-sourced).
+    6. New buildExtraFieldsCache(rows) helper next to
+       buildFieldRequirementsCache. Cache shape:
+       { '<role_slug>': [{key, label, required}] }.
+    7. hydrateCaseFromRpc adds a parallel call to
+       get_extras_for_subtype(c.act_type, c.subtype) (RPC was updated
+       v42 to return label_ro + is_required + display_order). Result
+       cached on c.extraFieldsByRole. Soft-fails on error → empty
+       cache → no extras render.
+    8. renderExtraFields callsite passes c instead of subtype.
+
+  Architectural commitment (closes D006):
+    Adding a new subtype to Squarespace now requires ONLY data work:
+      a) act_subtypes row
+      b) subtype_field_requirements rows
+      c) field_definitions rows (if any new field_keys)
+      d) admin template upload
+    No dashboard code changes required. Subtype appears automatically.
+
+  Smoke targets (all 9 subtypes — each should render its expected
+  universal fields per Ship 4 seed + its expected extras per
+  get_extras_for_subtype RPC):
+    - legalizari/legalizare_semnatura: 11 universal + 2 extras (semnatar)
+    - legalizari/legalizare_copie: 11 universal + 3 extras (solicitant)
+    - acorduri/acord_servitute_trecere: 11+9 universal + 8 extras
+    - acorduri/acord_vecini_constructie: 11+9 universal + 4 extras
+    - declaratii/declaratie_diverse: 13 universal + 0 extras (declarant)
+    - declaratii/consimtamant_calatorie_un_parinte: 13 universal + 14 extras
+    - declaratii/consimtamant_calatorie_ambii_parinti: 13+11 universal + 12 extras
+    - procuri/vanzare_imobil: 13+11 universal + 3 extras
+    - procuri/cumparare_imobil: 13+11 universal + 3 extras
+
+  Known regression (deliberate, scoped):
+    Legacy test cases whose extra_fields JSONB used pre-Ship-4 keys
+    (e.g. 'adresa_imobil' instead of canonical 'adresa_imobilului')
+    will render those values as empty in v70. Affects pre-v42 test
+    data only. No production cases affected (none yet exist).
+
+  Rollback target: v69 (restore the two mock dictionaries + the
+  three call signatures). RPC update (get_extras_for_subtype return
+  shape) is forward-compatible — v69 ignores the new columns.
+
+  D001 status: unchanged. The hydrator-rename smell persists.
+  v70's new buildExtraFieldsCache uses field_key directly (snake_case
+  canonical), bypassing REG_TO_COL — small step toward eventual D001
+  closure but doesn't alter the rename-layer architecture.
+
   ───────────────────────────────────────────────────────────────
   v68 → v69 changelog (B28 Ship 3 — field manifests from DB):
 
@@ -2072,168 +2136,50 @@ var FIELD_REGISTRY = [
   {tokenSuffix: 'MARITAL_STATUS',  fieldLabel: 'Stare civilă',     m: false}
 ];
 
-// ══ FIELD_REQUIREMENTS (v50) — slot-state config: required / optional / hidden, keyed by (subtype × role × field)
-// MOCK ONLY for 4b.0 design. Phase 4b replaces this with a query against subtype_field_requirements (Batch 5.5 schema).
-// Default for any unspecified entry: 'required'. Use 'hidden' to omit a slot, 'optional' for empty-OK.
-//
-// Stare civilă policy (4b.0 v0 — Claude's best read of Romanian notarial practice; correctable post-launch via admin UI):
-//   Required: real-estate procuri (vânzare/cumpărare imobil), succession declarations, both acorduri
-//   Optional: generală-class subtypes where notary's judgment varies
-//   Hidden:   movable property, banking, lost-document declarations, legalizări (already hidden)
-var FIELD_REQUIREMENTS_DEFAULT = 'required';
-var FIELD_REQUIREMENTS = {
-  // Procuri
-  'Vânzare imobil':        { Mandant: {}, Mandatar: {} },                                              // all required (default) — real estate, marital status legally relevant
-  'Cumpărare imobil':      { Mandant: {}, Mandatar: {} },                                              // same
-  'Vânzare auto':          { Mandant: { 'Stare civilă': 'hidden' }, Mandatar: { 'Stare civilă': 'hidden' } }, // movable property
-  'Bancară':               { Mandant: { 'Stare civilă': 'hidden', 'Cetățenie': 'optional' },
-                             Mandatar:{ 'Stare civilă': 'hidden', 'Cetățenie': 'optional' } },         // banking ops, not standard preamble
-  'Generală':              { Mandant: { 'Stare civilă': 'optional' }, Mandatar: { 'Stare civilă': 'optional' } }, // varies
-  // Declarații
-  'Acceptare succesiune':  { Declarant: {} },                                                          // succession — marital status legally relevant
-  'Renunțare succesiune':  { Declarant: {} },                                                          // same
-  'Luare în spațiu':       { Declarant: { 'Stare civilă': 'hidden', 'Cetățenie': 'optional' } },       // not in preamble
-  'De notorietate':        { Declarant: { 'Stare civilă': 'optional' } },                              // varies
-  'Pierdere act':          { Declarant: { 'Stare civilă': 'hidden', 'Cetățenie': 'optional' } },       // lost-act declarations
-  // Acorduri — both parties always required, marital status is the whole point
-  'Partaj bunuri':         { 'Parte I': {}, 'Parte II': {} },
-  'Între soți — divorț':   { 'Parte I': {}, 'Parte II': {} },
-  // Împuterniciri (Generală covered above by exact-subtype match; Bancară covered above too)
-  // Legalizări — minimal data needed, marital + birth_place + citizenship hidden
-  'Semnătură':             { Semnatar: { 'Stare civilă': 'hidden', 'Cetățenie': 'hidden', 'Locul nașterii': 'hidden' } },
-  'Copie':                 { Semnatar: { 'Stare civilă': 'hidden', 'Cetățenie': 'hidden', 'Locul nașterii': 'hidden', 'Data nașterii': 'optional' } }
-};
+// ══ FIELD_REQUIREMENTS (v70) — retired; was a mock dictionary in v50–v69.
+// Ship 4 (v42) landed all 209 subtype_field_requirements rows for the
+// 9 canonical subtypes. v70 deletes the mock and routes 100% through DB.
+// FIELD_REQUIREMENTS_DEFAULT is now 'hidden': any field NOT in the DB
+// seed for this (subtype, role) is hidden. Absence-from-seed = hidden,
+// per Ship 4 spec.
+var FIELD_REQUIREMENTS_DEFAULT = 'hidden';
 
 // Lookup: returns 'required' | 'optional' | 'hidden' for (case, role, fieldLabel).
-// v69 (B28 Ship 3) — DB-driven via c.fieldRequirementsByRole cache when populated;
-// mock fallback (FIELD_REQUIREMENTS) when no RPC rows exist for this role.
+// v70 (B28 Ship 4) — DB-only via c.fieldRequirementsByRole cache.
+// Built by hydrateCaseFromRpc from get_field_requirements_for_case. If RPC
+// returned any rows for the role, the cache is authoritative — fields NOT in
+// the cache are 'hidden'. If RPC returned zero rows for the role (subtype not
+// seeded yet, or role unknown) → return FIELD_REQUIREMENTS_DEFAULT ('hidden').
 //
-// Cache shape: c.fieldRequirementsByRole = { '<role_slug>': { '<fieldLabel>': '<state>' } }.
-// Built by hydrateCaseFromRpc from get_field_requirements_for_case. If RPC returned ANY rows
-// for the role, the cache is authoritative — fields NOT present in the seed are 'hidden'
-// (per Ship 4 spec: absence from seed = hidden). If no rows for the role, fall back to mock.
-//
-// `role` here is the RPC role slug ('semnatar', 'mandant'). renderField passes p.role_key.
+// `role` here is the RPC role slug ('semnatar', 'mandant'). renderField passes
+// p.role_key.
 function fieldRequirement(c, roleSlug, fieldLabel){
-  // DB cache path
   if (c && c.fieldRequirementsByRole) {
     var cacheForRole = c.fieldRequirementsByRole[roleSlug];
     if (cacheForRole) {
       // Role has seeded rows in DB — cache is authoritative.
-      // Field present in cache → its seeded state. Field absent → 'hidden' (Ship 4 spec).
+      // Field present in cache → its seeded state. Field absent → 'hidden'.
       return cacheForRole[fieldLabel] || 'hidden';
     }
   }
-  // Mock fallback — same logic as v68. Mock keys by Romanian subtype label, role display label.
-  var subtype = c ? c.subtype : '';
-  var roleDisplay = roleLabelRo(roleSlug); // map slug → display label for mock lookup
-  var s = FIELD_REQUIREMENTS[subtype];
-  if(!s) return FIELD_REQUIREMENTS_DEFAULT;
-  var r = s[roleDisplay] || s[roleSlug]; // tolerate either key shape on the mock
-  if(!r) return FIELD_REQUIREMENTS_DEFAULT;
-  return r[fieldLabel] || FIELD_REQUIREMENTS_DEFAULT;
+  // No DB cache (RPC failed, subtype unseeded, or role unknown).
+  return FIELD_REQUIREMENTS_DEFAULT;
 }
 
-// ══ EXTRA_FIELDS_CONFIG (v50) — act-specific extras catalog: subtype → role → ordered list of extra fields
-// Each entry: {key, label, mono?, required?}  — key is what the field stores into party.extra_fields[key].
-// MOCK ONLY for 4b.0 design. Phase 4b replaces with a query against field_definitions + subtype_field_requirements
-// (only rows where field_definition.is_universal = false).
-//
-// Rendered in a separate "Detalii act" block under the universal-fields block, scoped per role.
-// Empty state behavior: same as universal fields — required+empty → warning dot, optional+empty → "—".
-var EXTRA_FIELDS_CONFIG = {
-  // ── Procuri ──
-  'Vânzare imobil': {
-    Mandant: [
-      {key:'adresa_imobil',     label:'Adresa imobil',       required:true},
-      {key:'numar_cf',          label:'Număr CF',            mono:true,  required:true},
-      {key:'numar_cadastral',   label:'Număr cadastral',     mono:true,  required:false},
-      {key:'suprafata',         label:'Suprafață',           mono:true,  required:false},
-      {key:'pret_lei',          label:'Preț (lei)',          mono:true,  required:false}
-    ]
-  },
-  'Cumpărare imobil': {
-    Mandant: [
-      {key:'adresa_imobil',     label:'Adresa imobil',       required:true},
-      {key:'numar_cf',          label:'Număr CF',            mono:true,  required:false},
-      {key:'pret_lei',          label:'Preț (lei)',          mono:true,  required:false}
-    ]
-  },
-  'Vânzare auto': {
-    Mandant: [
-      {key:'marca',             label:'Marca',               required:true},
-      {key:'model',             label:'Model',               required:true},
-      {key:'serie_sasiu',       label:'Serie șasiu',         mono:true,  required:true},
-      {key:'numar_inmatriculare',label:'Număr înmatriculare',mono:true,  required:true},
-      {key:'an_fabricatie',     label:'An fabricație',       mono:true,  required:false}
-    ]
-  },
-  'Bancară': {
-    Mandant: [
-      {key:'banca',             label:'Banca',               required:true},
-      {key:'iban',              label:'IBAN',                mono:true,  required:true},
-      {key:'tip_operatiune',    label:'Tip operațiune',      required:false}
-    ]
-  },
-  // 'Generală' → no extras
-  // ── Declarații ──
-  'Acceptare succesiune': {
-    Declarant: [
-      {key:'nume_defunct',      label:'Nume defunct',        required:true},
-      {key:'data_deces',        label:'Data decesului',      required:true},
-      {key:'locul_deschiderii', label:'Locul deschiderii succesiunii', required:false}
-    ]
-  },
-  'Renunțare succesiune': {
-    Declarant: [
-      {key:'nume_defunct',      label:'Nume defunct',        required:true},
-      {key:'data_deces',        label:'Data decesului',      required:true}
-    ]
-  },
-  'Luare în spațiu': {
-    Declarant: [
-      {key:'adresa_imobil',     label:'Adresa imobilului',   required:true},
-      {key:'persoana_gazduita', label:'Persoana găzduită',   required:true},
-      {key:'cnp_gazduita',      label:'CNP persoană găzduită',mono:true, required:true}
-    ]
-  },
-  'De notorietate': {
-    Declarant: [
-      {key:'fapt_declarat',     label:'Fapt declarat',       required:true}
-    ]
-  },
-  'Pierdere act': {
-    Declarant: [
-      {key:'tip_act_pierdut',   label:'Tip act pierdut',     required:true},
-      {key:'numar_act',         label:'Număr act',           mono:true,  required:false},
-      {key:'data_emiterii_act', label:'Data emiterii actului',required:false}
-    ]
-  },
-  // ── Împuterniciri ──
-  // 'Generală' → no extras (covered above by name match)
-  // 'Bancară' → covered above (same shape as Procuri Bancară)
-  // ── Acorduri ──
-  'Partaj bunuri': {
-    'Parte I': [
-      {key:'descriere_bunuri',  label:'Descriere bunuri partaj', required:true}
-    ]
-  },
-  'Între soți — divorț': {
-    'Parte I': [
-      {key:'data_casatoriei',   label:'Data căsătoriei',     required:true},
-      {key:'locul_casatoriei',  label:'Locul căsătoriei',    required:true},
-      {key:'copii_minori',      label:'Copii minori',        required:false}
-    ]
-  }
-  // ── Legalizări ──
-  // No extras — minimal data acts
-};
+// ══ EXTRA_FIELDS_CONFIG (v70) — retired; was a mock dictionary in v50–v69.
+// Ship 4 (v42) populated subtype_field_requirements + field_definitions
+// for all 9 canonical subtypes. RPC get_extras_for_subtype(act_type, subtype)
+// returns the full per-role extras list with labels + required flags.
+// v70 deletes the mock; extras render purely from the DB-driven cache.
 
-// Lookup: returns array of extra field defs for (subtype, role), or [] if none.
-function extraFieldsFor(subtype, role){
-  var s = EXTRA_FIELDS_CONFIG[subtype];
-  if(!s) return [];
-  return s[role] || [];
+// Lookup: returns array of extra field defs for (case, role), or [] if none.
+// v70 (B28 Ship 4) — reads from c.extraFieldsByRole cache populated by
+// hydrateCaseFromRpc via get_extras_for_subtype RPC.
+// Cache shape: c.extraFieldsByRole = { '<role_slug>': [{key, label, required}] }.
+// If cache missing for the case (subtype unseeded or RPC failed) → return [].
+function extraFieldsFor(c, role){
+  if (!c || !c.extraFieldsByRole) return [];
+  return c.extraFieldsByRole[role] || [];
 }
 
 // v59 — TEMPLATE_CACHE backs findDraftForCase. Keyed by case id; entry states:
@@ -2746,6 +2692,29 @@ function buildFieldRequirementsCache(rows){
   return cache;
 }
 
+// v70 (B28 Ship 4) — build the per-case extras cache from
+// get_extras_for_subtype rows. RPC returns:
+//   { role: '<slug>', field_key: '<snake_case>', label_ro: '<Romanian label>',
+//     is_required: bool, display_order: int } (already sorted by display_order).
+// Cache produced:
+//   { '<role_slug>': [{ key: '<field_key>', label: '<label_ro>', required: bool }] }
+// Rows preserve display_order from the RPC (ORDER BY in the SQL).
+// Used by extraFieldsFor(c, role) → consumed by renderExtraFields.
+function buildExtraFieldsCache(rows){
+  var cache = {};
+  rows.forEach(function(r){
+    var roleSlug = r.role || '';
+    if (!roleSlug) return;
+    if (!cache[roleSlug]) cache[roleSlug] = [];
+    cache[roleSlug].push({
+      key:      r.field_key,
+      label:    r.label_ro,
+      required: !!r.is_required
+    });
+  });
+  return cache;
+}
+
 // Hydrate the open case in-place with parties + notes from get_case_with_parties.
 // Returns a Promise. Caller should call populateView/refreshStatusVisuals after resolve.
 function hydrateCaseFromRpc(caseId){
@@ -2788,17 +2757,26 @@ function hydrateCaseFromRpc(caseId){
     }
     c.parties = (payload.parties || []).map(rpcPartyToInMemory);
     c.notes_full = payload.notes || [];           // raw notes array (used by saveNotes refresh)
-    // v69 (B28 Ship 3) — fetch field manifest from DB and build cache for fieldRequirement().
-    // Cache shape: c.fieldRequirementsByRole = { '<role_slug>': { '<fieldLabel>': '<state>' } }.
-    // RPC returns rows for seeded subtypes only. Soft-fails on error (mock fallback applies).
-    return rpc('get_field_requirements_for_case', { p_case_id: caseId }).then(function(rows){
-      c.fieldRequirementsByRole = buildFieldRequirementsCache(rows || []);
-      return c;
-    }).catch(function(err){
-      console.error('[get_field_requirements_for_case]', err);
-      c.fieldRequirementsByRole = {}; // empty cache → mock fallback in fieldRequirement()
-      return c;
-    });
+    // v70 (B28 Ship 4) — fetch field-requirements AND extras manifests from DB in parallel.
+    // Both caches feed the dashboard's slot-state + extras render. RPCs are independent;
+    // Promise.all lets them resolve concurrently. Soft-fails individually: a failed
+    // requirements RPC leaves an empty c.fieldRequirementsByRole (fields render hidden);
+    // a failed extras RPC leaves an empty c.extraFieldsByRole (extras block omitted).
+    var actType = (payload['case'] && payload['case'].act_type) || c.act_type || '';
+    var subtype = (payload['case'] && payload['case'].subtype)  || c.subtype  || '';
+    var reqPromise = rpc('get_field_requirements_for_case', { p_case_id: caseId })
+      .then(function(rows){ c.fieldRequirementsByRole = buildFieldRequirementsCache(rows || []); })
+      .catch(function(err){
+        console.error('[get_field_requirements_for_case]', err);
+        c.fieldRequirementsByRole = {};
+      });
+    var extrasPromise = rpc('get_extras_for_subtype', { p_act_type: actType, p_subtype: subtype })
+      .then(function(rows){ c.extraFieldsByRole = buildExtraFieldsCache(rows || []); })
+      .catch(function(err){
+        console.error('[get_extras_for_subtype]', err);
+        c.extraFieldsByRole = {};
+      });
+    return Promise.all([reqPromise, extrasPromise]).then(function(){ return c; });
   }).catch(function(err){
     console.error('[hydrateCaseFromRpc]', err);
     if (typeof showToast === 'function') showToast('Eroare la încărcarea dosarului');
@@ -3106,17 +3084,18 @@ function renderParties(c){
     var roleTag=c.parties.length>1?'<div class="tag-role">'+p.role+'</div>':'';
     return roleTag
       + renderPartyFields(p.fields, c, p.role_key || '')
-      + renderExtraFields(p, c.subtype);
+      + renderExtraFields(p, c);
   }).join('');
 }
 
-// ══ EXTRA FIELDS RENDERER (v50 Change 3)
+// ══ EXTRA FIELDS RENDERER (v70 — DB-driven)
 // Renders the "Detalii act" block below the universal-fields block, per party.
-// Driven by EXTRA_FIELDS_CONFIG (mock) — Phase 4b sources from field_definitions where is_universal=false.
-// Same slot states as universal: filled / empty-required (warning dot) / empty-optional ("—").
-// Returns '' if no extras configured for this subtype/role (block omitted entirely).
-function renderExtraFields(party, subtype){
-  var defs = extraFieldsFor(subtype, party.role);
+// v70 sources extras from c.extraFieldsByRole cache (built in hydrator from
+// get_extras_for_subtype RPC). Mock dictionary EXTRA_FIELDS_CONFIG retired.
+// Same slot states as universal: filled / empty-required (warning dot) /
+// empty-optional ("—"). Returns '' if no extras for this (case, role).
+function renderExtraFields(party, c){
+  var defs = extraFieldsFor(c, party.role);
   if(!defs.length) return '';
   var values = party.extra_fields || {};
   var rows = defs.map(function(def){
