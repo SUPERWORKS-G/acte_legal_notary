@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.2 2026-05-12
+  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.3 2026-05-12
   ───────────────────────────────────────────────────────────────
   v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
 
@@ -2756,6 +2756,24 @@ function hydrateCaseFromRpc(caseId){
       c.prepared = null;
     }
     c.parties = (payload.parties || []).map(rpcPartyToInMemory);
+    // v70.3 — duplicate-role disambiguation (D009 closure dashboard-side).
+    // Some subtypes (e.g. consimtamant_calatorie_ambii_parinti) have 2+ parties with
+    // the same role slug in case_parties (e.g. role='parinte' for both parents). The
+    // Ship 4 seed and EF v4 token emitter both use position-suffixed slugs (parinte_1,
+    // parinte_2). Walk parties post-RPC and rewrite role_key with a 1-based suffix
+    // when duplicates exist. RPC already sorts by (role, position) so array order is stable.
+    (function disambiguateDuplicateRoles(){
+      var counts = {};
+      c.parties.forEach(function(p){ counts[p.role_key] = (counts[p.role_key] || 0) + 1; });
+      var seen = {};
+      c.parties.forEach(function(p){
+        if (counts[p.role_key] > 1) {
+          var base = p.role_key;
+          seen[base] = (seen[base] || 0) + 1;
+          p.role_key = base + '_' + seen[base]; // parinte → parinte_1, parinte_2, ...
+        }
+      });
+    })();
     c.notes_full = payload.notes || [];           // raw notes array (used by saveNotes refresh)
     // v70 (B28 Ship 4) — fetch field-requirements AND extras manifests from DB in parallel.
     // Both caches feed the dashboard's slot-state + extras render. RPCs are independent;
