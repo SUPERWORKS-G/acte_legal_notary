@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) 2026-05-12
+  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.2 2026-05-12
   ───────────────────────────────────────────────────────────────
   v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
 
@@ -3095,7 +3095,9 @@ function renderParties(c){
 // Same slot states as universal: filled / empty-required (warning dot) /
 // empty-optional ("—"). Returns '' if no extras for this (case, role).
 function renderExtraFields(party, c){
-  var defs = extraFieldsFor(c, party.role);
+  // Cache is keyed by role slug, not display label. renderPartyFields uses
+  // party.role_key for the same reason.
+  var defs = extraFieldsFor(c, party.role_key || party.role);
   if(!defs.length) return '';
   var values = party.extra_fields || {};
   var rows = defs.map(function(def){
