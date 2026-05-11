@@ -2763,7 +2763,7 @@ function hydrateCaseFromRpc(caseId){
     // requirements RPC leaves an empty c.fieldRequirementsByRole (fields render hidden);
     // a failed extras RPC leaves an empty c.extraFieldsByRole (extras block omitted).
     var actType = (payload['case'] && payload['case'].act_type) || c.act_type || '';
-    var subtype = (payload['case'] && payload['case'].subtype)  || c.subtype  || '';
+    var subtype = (payload['case'] && payload['case'].subtype_key) || c.subtype || '';
     var reqPromise = rpc('get_field_requirements_for_case', { p_case_id: caseId })
       .then(function(rows){ c.fieldRequirementsByRole = buildFieldRequirementsCache(rows || []); })
       .catch(function(err){
