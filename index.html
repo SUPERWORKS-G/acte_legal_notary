@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.4 2026-05-12
+  acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.5 2026-05-12
   ───────────────────────────────────────────────────────────────
   v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
 
@@ -2657,9 +2657,10 @@ function rpcPartyToInMemory(p){
     });
   }
   return {
-    role:     displayLabel,
-    role_key: roleSlug,
-    fields:   fields
+    role:         displayLabel,
+    role_key:     roleSlug,
+    fields:       fields,
+    extra_fields: p.extra_fields || {}  // v70.5 — preserved for renderExtraFields (DB-driven path)
   };
 }
 
