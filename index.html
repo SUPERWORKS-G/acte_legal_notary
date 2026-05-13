@@ -24,6 +24,14 @@
      Code identifiers (regenerateAct function name, _runRegeneration)
      left unchanged — internal only.
 
+  3. Dropped the "acum câteva secunde" relative-time meta row from
+     both the programat and finalizat success blocks. Reasons:
+     (a) buttons no longer pushed below the fold on re-prep —
+         success block stays compact in the column.
+     (b) istoric column already carries the precise timestamp
+         ("13 mai 2026 — act refăcut"), so info isn't lost.
+     The "Act pregătit" label is retained as the success signal.
+
   Files touched: this file only. No backend / RPC / EF changes.
   Deploy: paste-replace the existing Dashboard HTML host (GitHub Pages
   /notar-dashboard branch). No env vars, no Supabase changes.
@@ -3281,12 +3289,10 @@ function renderPrepSlot(prefix, c){
   }
   // SUCCESS state — doc has been prepared (status=programat with prepared metadata)
   if(c.status === 'programat' && c.prepared){
-    var when = formatRelativeTime(c.prepared.generatedAt);
     slot.innerHTML =
       '<div class="prep-success">'
       +   '<div class="prep-success-meta">'
       +     '<div class="prep-success-lbl">Act pregătit</div>'
-      +     '<div class="prep-success-when">'+when+'</div>'
       +   '</div>'
       +   '<div class="prep-success-actions">'
       +     '<button class="btn-prep" onclick="redownloadAct()" title="Descarcă actul deja generat">Descarcă ↓</button>'
@@ -3302,12 +3308,10 @@ function renderPrepSlot(prefix, c){
   // by toast in confirmProgramare().
   if(c.status === 'finalizat'){
     if(c.prepared){
-      var whenF = formatRelativeTime(c.prepared.generatedAt);
       slot.innerHTML =
         '<div class="prep-success">'
         +   '<div class="prep-success-meta">'
         +     '<div class="prep-success-lbl">Act pregătit</div>'
-        +     '<div class="prep-success-when">'+whenF+'</div>'
         +   '</div>'
         +   '<div class="prep-success-actions" style="grid-template-columns:1fr;">'
         +     '<button class="btn-prep" onclick="redownloadAct()" title="Descarcă actul">Descarcă ↓</button>'
