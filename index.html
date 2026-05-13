@@ -1,5 +1,47 @@
 <!DOCTYPE html>
 <!--
+  acte.legal — Dashboard v72 · CANONICAL · N073/LB-5 notary self-service screens · 2026-05-13
+  ───────────────────────────────────────────────────────────────
+  v71 → v72 changelog (master v46, N073/LB-5):
+
+  Notary self-service: three new auth screens layered onto the existing
+  sign-in shell. All three reuse .auth-screen / .auth-box / .auth-form-*
+  CSS for visual parity with the canonical sign-in.
+
+  1. Existing sign-in screen — adds "Am uitat parola" link below the
+     primary button (new .auth-link class, grey2, sans 12px). Clicking
+     navigates to /?reset_password=1.
+
+  2. NEW: activation-screen — URL /?activation=complete. Where Supabase
+     invite links redirect after token exchange. Notary lands logged in
+     (recovery session) but with no password set. Form: email (disabled,
+     pre-filled from session), Parolă, Confirmă parola, Activează contul.
+     On submit: sb.auth.updateUser({password}) → invoke EF
+     'complete-notary-activation' to flip notary_offices.setup_completed_at
+     → drop query param and reload into dashboard.
+
+  3. NEW: reset-screen — URL /?reset_password=1. Single-field form: email
+     + Trimite link button + helper text below button (canonical 24px
+     gap, button-width padding) + "Înapoi la sign-in" link. On submit:
+     invoke EF 'send-notary-password-reset' with {email}. Returns
+     always-success copy to prevent user enumeration.
+
+  4. NEW: reset-complete-screen — URL /?reset_password=complete. Where
+     Supabase password-recovery email link redirects. Form: Parolă nouă,
+     Confirmă parola, Salvează parola. On submit: sb.auth.updateUser(
+     {password}) → drop query and reload.
+
+  Routing: maybeShowSelfServiceScreen() runs as the first step of
+  bootLiveDashboard(). If a query param matches one of the three flows,
+  show that screen and SKIP requireSession (or call getSession() for
+  recovery-session detection). Else fall through to normal auth gate.
+
+  Edge Function dependencies (deploy separately):
+    - complete-notary-activation   (master EF, N073, deploy in v46)
+    - send-notary-password-reset   (master EF, N073, deploy in v46)
+
+  v71 patch v71.0 2026-05-13 changelog preserved below:
+  ───────────────────────────────────────────────────────────────
   acte.legal — Dashboard v71 · CANONICAL · LB-4/N068 Pregătește gate widening + Refă actul copy sweep · 2026-05-13
   ───────────────────────────────────────────────────────────────
   v70 → v71 changelog (master v46, LB-4/N068):
@@ -1571,6 +1613,12 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
 .auth-btn-primary{font-family:var(--sans);font-size:14px;color:var(--white);background:var(--ink);border:none;padding:12px 22px;cursor:pointer;transition:opacity .15s;}
 .auth-btn-primary:hover{opacity:.85;}
 .auth-btn-primary:disabled{opacity:.35;cursor:not-allowed;}
+/* v72 — N073/LB-5 self-service additions */
+.auth-link{font-family:var(--sans);font-size:12px;color:var(--grey2);text-align:center;cursor:pointer;}
+.auth-link:hover{color:var(--ink);}
+.auth-form-inp:disabled{color:var(--grey2);cursor:not-allowed;}
+.auth-helper{font-family:var(--sans);font-size:12px;color:var(--grey2);line-height:1.5;text-align:center;padding:0 22px;box-sizing:border-box;}
+.auth-success{font-family:var(--sans);font-size:13px;color:var(--ink);line-height:1.5;text-align:center;}
 </style>
 </head>
 <body>
@@ -1593,6 +1641,69 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
     </div>
     <div class="auth-err" id="auth-err"></div>
     <button class="auth-btn-primary" id="auth-btn">Intră în cont ⟶</button>
+    <div class="auth-link" id="auth-link-forgot">Am uitat parola</div>
+  </div>
+</div>
+
+<!-- ══ ACTIVATION SCREEN (v72, N073/LB-5) — invited notary sets password ══ -->
+<!-- URL: /?activation=complete (Supabase invite link redirects here after token exchange) -->
+<div class="auth-screen hidden" id="activation-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-title">acte.legal</div>
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Email</span>
+      <input class="auth-form-inp" type="email" id="activation-email" disabled>
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Parolă</span>
+      <input class="auth-form-inp" type="password" id="activation-pass" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Confirmă parola</span>
+      <input class="auth-form-inp" type="password" id="activation-pass2" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <div class="auth-err" id="activation-err"></div>
+    <button class="auth-btn-primary" id="activation-btn">Activează contul ⟶</button>
+  </div>
+</div>
+
+<!-- ══ RESET PASSWORD REQUEST SCREEN (v72, N073/LB-5) — request reset link by email ══ -->
+<!-- URL: /?reset_password=1 (lands from "Am uitat parola" link on sign-in) -->
+<div class="auth-screen hidden" id="reset-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-title">acte.legal</div>
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Email</span>
+      <input class="auth-form-inp" type="email" id="reset-email" placeholder="nume@birou-notarial.ro" autocomplete="email">
+    </div>
+    <div class="auth-err" id="reset-err"></div>
+    <button class="auth-btn-primary" id="reset-btn">Trimite link ⟶</button>
+    <div class="auth-helper" id="reset-helper">Trimitem un link de resetare pe email. Linkul este valabil 1 oră.</div>
+    <div class="auth-link" id="reset-link-back">Înapoi la sign-in</div>
+  </div>
+</div>
+
+<!-- ══ RESET PASSWORD COMPLETION SCREEN (v72, N073/LB-5) — user clicked reset link, sets new password ══ -->
+<!-- URL: /?reset_password=complete (Supabase password-recovery redirect lands here after token exchange) -->
+<div class="auth-screen hidden" id="reset-complete-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-title">acte.legal</div>
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Parolă nouă</span>
+      <input class="auth-form-inp" type="password" id="reset-complete-pass" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <div class="auth-form-group">
+      <span class="auth-form-lbl">Confirmă parola</span>
+      <input class="auth-form-inp" type="password" id="reset-complete-pass2" placeholder="••••••••" autocomplete="new-password">
+    </div>
+    <div class="auth-err" id="reset-complete-err"></div>
+    <button class="auth-btn-primary" id="reset-complete-btn">Salvează parola ⟶</button>
   </div>
 </div>
 
@@ -2072,6 +2183,228 @@ document.getElementById('auth-pass').addEventListener('keydown', function(e) {
 document.getElementById('auth-email').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') document.getElementById('auth-pass').focus();
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// v72 — N073/LB-5 — Notary self-service: activation completion + forgot password
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Three new screens beyond the existing sign-in:
+//   1. activation-screen      — URL ?activation=complete  (Supabase invite redirect lands here)
+//   2. reset-screen           — URL ?reset_password=1     (user clicks "Am uitat parola" on sign-in)
+//   3. reset-complete-screen  — URL ?reset_password=complete (Supabase recovery email redirect)
+//
+// The router below runs ONCE at boot, BEFORE requireSession(). If a query param
+// matches one of the three flows, show that screen and SKIP normal auth gate.
+// Otherwise, fall through to the existing requireSession() path (sign-in or dashboard).
+//
+// Edge Function dependencies (called from button handlers):
+//   - complete-notary-activation  (master EF, deployed separately)
+//   - send-notary-password-reset  (master EF, deployed separately)
+
+function showActivationScreen() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('reset-screen').classList.add('hidden');
+  document.getElementById('reset-complete-screen').classList.add('hidden');
+  document.getElementById('activation-screen').classList.remove('hidden');
+  document.getElementById('main-page').style.display = 'none';
+}
+function showResetScreen() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('activation-screen').classList.add('hidden');
+  document.getElementById('reset-complete-screen').classList.add('hidden');
+  document.getElementById('reset-screen').classList.remove('hidden');
+  document.getElementById('main-page').style.display = 'none';
+}
+function showResetCompleteScreen() {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('activation-screen').classList.add('hidden');
+  document.getElementById('reset-screen').classList.add('hidden');
+  document.getElementById('reset-complete-screen').classList.remove('hidden');
+  document.getElementById('main-page').style.display = 'none';
+}
+
+// URL router — runs at boot. Returns true if a self-service screen was shown
+// (caller should skip the normal session check).
+function maybeShowSelfServiceScreen() {
+  var params = new URLSearchParams(window.location.search);
+  // Activation: Supabase invite link has exchanged the token for a session.
+  // We're now logged in as the user; their job is to set password + we flip setup_completed_at.
+  if (params.get('activation') === 'complete') {
+    return sb.auth.getSession().then(function(res) {
+      var session = res && res.data && res.data.session;
+      if (!session) {
+        // Token exchange failed or link expired — bounce to sign-in with a flag.
+        console.warn('[activation] no session — link may be expired');
+        return false;
+      }
+      document.getElementById('activation-email').value = session.user.email || '';
+      showActivationScreen();
+      return true;
+    });
+  }
+  // Forgot-password request screen.
+  if (params.get('reset_password') === '1') {
+    showResetScreen();
+    return Promise.resolve(true);
+  }
+  // Password recovery completion (Supabase auth state event "PASSWORD_RECOVERY" or query flag).
+  if (params.get('reset_password') === 'complete') {
+    return sb.auth.getSession().then(function(res) {
+      var session = res && res.data && res.data.session;
+      if (!session) {
+        console.warn('[reset-complete] no recovery session');
+        return false;
+      }
+      showResetCompleteScreen();
+      return true;
+    });
+  }
+  return Promise.resolve(false);
+}
+
+// ── Sign-in screen: wire "Am uitat parola" link → navigate to ?reset_password=1
+document.getElementById('auth-link-forgot').addEventListener('click', function() {
+  window.location.search = '?reset_password=1';
+});
+
+// ── Activation screen: button + Enter handlers
+document.getElementById('activation-btn').addEventListener('click', function() {
+  var pass = document.getElementById('activation-pass').value;
+  var pass2 = document.getElementById('activation-pass2').value;
+  var errEl = document.getElementById('activation-err');
+  var btn = document.getElementById('activation-btn');
+  errEl.classList.remove('show');
+  if (!pass || !pass2) {
+    errEl.textContent = 'Completează parola de două ori.';
+    errEl.classList.add('show'); return;
+  }
+  if (pass.length < 8) {
+    errEl.textContent = 'Parola trebuie să aibă cel puțin 8 caractere.';
+    errEl.classList.add('show'); return;
+  }
+  if (pass !== pass2) {
+    errEl.textContent = 'Parolele nu coincid.';
+    errEl.classList.add('show'); return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Se activează…';
+  // Step 1: set the password on the existing (invite-created) auth.users row.
+  sb.auth.updateUser({ password: pass }).then(function(res) {
+    if (res.error) {
+      btn.disabled = false;
+      btn.textContent = 'Activează contul ⟶';
+      errEl.textContent = res.error.message || 'Activare eșuată — reîncearcă.';
+      errEl.classList.add('show');
+      return;
+    }
+    // Step 2: tell the backend to flip setup_completed_at on the office row.
+    return sb.functions.invoke('complete-notary-activation', { body: {} }).then(function(fnRes) {
+      btn.disabled = false;
+      btn.textContent = 'Activează contul ⟶';
+      if (fnRes.error) {
+        // Password is already set; flag the backend hiccup but proceed to dashboard.
+        console.warn('[activation] setup_completed_at flip failed:', fnRes.error);
+      }
+      // Activation complete — drop the query param and reload into the dashboard.
+      window.location.search = '';
+    });
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = 'Activează contul ⟶';
+    errEl.textContent = (err && err.message) || 'Activare eșuată — reîncearcă.';
+    errEl.classList.add('show');
+  });
+});
+document.getElementById('activation-pass').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('activation-pass2').focus();
+});
+document.getElementById('activation-pass2').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('activation-btn').click();
+});
+
+// ── Reset request screen: button + Enter handlers
+document.getElementById('reset-btn').addEventListener('click', function() {
+  var email = document.getElementById('reset-email').value.trim();
+  var errEl = document.getElementById('reset-err');
+  var btn = document.getElementById('reset-btn');
+  errEl.classList.remove('show');
+  if (!email) {
+    errEl.textContent = 'Completează adresa de email.';
+    errEl.classList.add('show'); return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Se trimite…';
+  // Invoke the EF that owns: auth.resetPasswordForEmail() + render_and_send_b2b_email
+  sb.functions.invoke('send-notary-password-reset', { body: { email: email } }).then(function(res) {
+    btn.disabled = false;
+    btn.textContent = 'Trimite link ⟶';
+    if (res.error) {
+      errEl.textContent = (res.error && res.error.message) || 'Trimitere eșuată — reîncearcă.';
+      errEl.classList.add('show');
+      return;
+    }
+    // Always show success copy regardless of email-existence (prevents user enumeration).
+    btn.style.display = 'none';
+    document.getElementById('reset-email').disabled = true;
+    document.getElementById('reset-helper').innerHTML = '<span class="auth-success">Dacă adresa este înregistrată, vei primi un email cu linkul de resetare.</span>';
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = 'Trimite link ⟶';
+    errEl.textContent = (err && err.message) || 'Trimitere eșuată — reîncearcă.';
+    errEl.classList.add('show');
+  });
+});
+document.getElementById('reset-email').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('reset-btn').click();
+});
+document.getElementById('reset-link-back').addEventListener('click', function() {
+  window.location.search = '';
+});
+
+// ── Reset completion screen: button + Enter handlers
+document.getElementById('reset-complete-btn').addEventListener('click', function() {
+  var pass = document.getElementById('reset-complete-pass').value;
+  var pass2 = document.getElementById('reset-complete-pass2').value;
+  var errEl = document.getElementById('reset-complete-err');
+  var btn = document.getElementById('reset-complete-btn');
+  errEl.classList.remove('show');
+  if (!pass || !pass2) {
+    errEl.textContent = 'Completează parola de două ori.';
+    errEl.classList.add('show'); return;
+  }
+  if (pass.length < 8) {
+    errEl.textContent = 'Parola trebuie să aibă cel puțin 8 caractere.';
+    errEl.classList.add('show'); return;
+  }
+  if (pass !== pass2) {
+    errEl.textContent = 'Parolele nu coincid.';
+    errEl.classList.add('show'); return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Se salvează…';
+  sb.auth.updateUser({ password: pass }).then(function(res) {
+    btn.disabled = false;
+    btn.textContent = 'Salvează parola ⟶';
+    if (res.error) {
+      errEl.textContent = res.error.message || 'Salvare eșuată — reîncearcă.';
+      errEl.classList.add('show'); return;
+    }
+    // Password updated — drop the query and reload into the dashboard (session is live).
+    window.location.search = '';
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = 'Salvează parola ⟶';
+    errEl.textContent = (err && err.message) || 'Salvare eșuată — reîncearcă.';
+    errEl.classList.add('show');
+  });
+});
+document.getElementById('reset-complete-pass').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('reset-complete-pass2').focus();
+});
+document.getElementById('reset-complete-pass2').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') document.getElementById('reset-complete-btn').click();
+});
+
 
 // Logout handler — wired to the Ieșire button on header strip.
 function signOutAndReload() {
@@ -2976,27 +3309,31 @@ function renderOfficeIdentity(){
 // Boot — orchestrates auth check + identity fetch + cases + today's appointments.
 // Calls existing post-data init paths (rebuildAllLists, switchView) once data lands.
 function bootLiveDashboard(){
-  return requireSession().then(function(session){
-    if (!session) return null;
-    CURRENT_USER.id = session.user.id;
-    // Fire identity, cases, and today's appointments in parallel — they're independent reads.
-    return Promise.all([
-      rpc('get_my_office'),
-      rpc('get_office_cases'),
-      rpc('get_office_appointments_today')
-    ]).then(function(results){
-      var officeRows = results[0] || [];
-      var caseRows = results[1] || [];
-      var todayRows = results[2] || [];
+  // v72 (N073/LB-5) — self-service router runs first. If a query param matches
+  // activation/reset flows, show that screen and skip the dashboard boot path.
+  return Promise.resolve(maybeShowSelfServiceScreen()).then(function(handled){
+    if (handled) return null;
+    return requireSession().then(function(session){
+      if (!session) return null;
+      CURRENT_USER.id = session.user.id;
+      // Fire identity, cases, and today's appointments in parallel — they're independent reads.
+      return Promise.all([
+        rpc('get_my_office'),
+        rpc('get_office_cases'),
+        rpc('get_office_appointments_today')
+      ]).then(function(results){
+        var officeRows = results[0] || [];
+        var caseRows = results[1] || [];
+        var todayRows = results[2] || [];
 
-      // get_my_office returns a TABLE; take first row.
-      var office = officeRows[0] || {};
-      CURRENT_USER.office_id = office.office_id || null;
-      CURRENT_USER.office_name = office.office_name || '';
-      CURRENT_USER.office_address = office.office_address || '';
-      CURRENT_USER.display_name = office.acting_user_display_name || '';
+        // get_my_office returns a TABLE; take first row.
+        var office = officeRows[0] || {};
+        CURRENT_USER.office_id = office.office_id || null;
+        CURRENT_USER.office_name = office.office_name || '';
+        CURRENT_USER.office_address = office.office_address || '';
+        CURRENT_USER.display_name = office.acting_user_display_name || '';
 
-      // Drain CASES and re-populate from RPC.
+        // Drain CASES and re-populate from RPC.
       CASES.length = 0;
       caseRows.forEach(function(row){ CASES.push(rpcCaseToInMemory(row)); });
 
@@ -3023,6 +3360,7 @@ function bootLiveDashboard(){
     console.error('[bootLiveDashboard]', err);
     if (typeof showToast === 'function') showToast('Eroare la încărcarea panoului — reîncarcă pagina');
   });
+  });  // close v72 (N073/LB-5) self-service router .then
 }
 
 // ══ END LIVE LOADERS ═══════════════════════════════════════════════════════════════════
