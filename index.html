@@ -1,5 +1,35 @@
 <!DOCTYPE html>
 <!--
+  acte.legal — Dashboard v71 · CANONICAL · LB-4/N068 Pregătește gate widening + Refă actul copy sweep · 2026-05-13
+  ───────────────────────────────────────────────────────────────
+  v70 → v71 changelog (master v46, LB-4/N068):
+
+  Two-part patch on the notary dashboard:
+
+  1. Pregătește act ↓ enable-gate widened from equality to set membership
+     per Directive 13.37 (mirror of v43 N064 EF-side fix). Old gate:
+     status === 'in-lucru'. New gate: status === 'in-lucru' OR
+     (status === 'programat' && !c.prepared). Closes the stuck-programat
+     case where notary couldn't generate a doc on a case past Confirmă
+     programarea but lacking a prepared row. The success-block regen
+     path (status === 'programat' && c.prepared) is unchanged — that's
+     where "Refă actul" lives.
+
+  2. Copy sweep "Regenerează" → "Refă actul" across all user-visible
+     strings for friendlier Romanian tone:
+       - success-block secondary button label
+       - regenerateAct() confirm modal: title, body, confirmLabel
+       - "Nimic de regenerat" toast → "Nimic de refăcut"
+       - history stamp "act regenerat" → "act refăcut"
+     Code identifiers (regenerateAct function name, _runRegeneration)
+     left unchanged — internal only.
+
+  Files touched: this file only. No backend / RPC / EF changes.
+  Deploy: paste-replace the existing Dashboard HTML host (GitHub Pages
+  /notar-dashboard branch). No env vars, no Supabase changes.
+
+  v70 patch v70.5 2026-05-12 changelog preserved below:
+  ───────────────────────────────────────────────────────────────
   acte.legal — Dashboard v70 · CANONICAL · B28 Ship 4 mock retirement (D006 closure) · patch v70.5 2026-05-12
   ───────────────────────────────────────────────────────────────
   v69 → v70 changelog (B28 Ship 4 — mock dictionaries retired, full DB-driven):
@@ -2270,7 +2300,7 @@ function prepareAct(){
     } else {
       // Regen path (already programat) — different stamp.
       c.hist = c.hist || [];
-      c.hist.push(histStamp(new Date()) + ' — act regenerat');
+      c.hist.push(histStamp(new Date()) + ' — act refăcut');
     }
     refreshStatusVisuals(c);
     if (wasInLucru) rebuildAllLists();
@@ -3260,7 +3290,7 @@ function renderPrepSlot(prefix, c){
       +   '</div>'
       +   '<div class="prep-success-actions">'
       +     '<button class="btn-prep" onclick="redownloadAct()" title="Descarcă actul deja generat">Descarcă ↓</button>'
-      +     '<button class="btn-prep btn-prep-secondary" onclick="regenerateAct()" title="Regenerează actul cu datele actuale">Regenerează<svg class="btn-glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 3v3.5H10"/><path d="M13.2 6.4A5.5 5.5 0 1 0 13.5 10"/></svg></button>'
+      +     '<button class="btn-prep btn-prep-secondary" onclick="regenerateAct()" title="Refă actul cu datele actuale">Refă actul<svg class="btn-glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 3v3.5H10"/><path d="M13.2 6.4A5.5 5.5 0 1 0 13.5 10"/></svg></button>'
       +   '</div>'
       + '</div>';
     return;
@@ -3297,12 +3327,12 @@ function renderPrepSlot(prefix, c){
       + '</span>';
     return;
   }
-  // ENABLED state — status='in-lucru' (UI vocab) / 'in_review' (schema). Only state in
-  // which a fresh Pregătește act invocation is valid. Any other status (programat without
-  // prepared, finalizat without prepared, unknown) → render disabled with a status-aware
-  // tooltip. v54 (B7): tightens the fallthrough that previously left the button live on
-  // 'programat' cases lacking c.prepared — surfaced by master's gate-3 retest.
-  if(c.status === 'in-lucru'){
+  // ENABLED state — v71 (N068/LB-4) widens from equality to set membership per Directive 13.37.
+  // Schema: in_review | booked | completed. UI vocab: in-lucru | programat | finalizat.
+  // Enable on in-lucru (fresh prep) OR programat WITHOUT c.prepared (stuck-post-confirm retry).
+  // programat WITH c.prepared is the success path (handled at line 3253; Regenerează lives there).
+  // finalizat is handled at line 3273 (success block or "Dosar finalizat" placeholder).
+  if(c.status === 'in-lucru' || (c.status === 'programat' && !c.prepared)){
     slot.innerHTML = '<button class="btn-prep" id="'+prefix+'-prep-btn" onclick="prepareAct()">Pregătește act ↓</button>';
     return;
   }
@@ -3502,11 +3532,11 @@ function _confirmClose(viaConfirm){
 function regenerateAct(){
   var c = CASES.find(function(x){ return x.id === currentOpenCase; });
   if(!c){ showToast('Niciun dosar activ'); return; }
-  if(c.status !== 'programat' || !c.prepared){ showToast('Nimic de regenerat'); return; }
+  if(c.status !== 'programat' || !c.prepared){ showToast('Nimic de refăcut'); return; }
   showConfirm({
-    title: 'Regenerare act',
-    body: 'Generați din nou? Actul curent va fi înlocuit.',
-    confirmLabel: 'Generează din nou',
+    title: 'Refă actul',
+    body: 'Refaceți actul? Versiunea curentă va fi înlocuită.',
+    confirmLabel: 'Refă actul',
     cancelLabel: 'Anulează',
     onConfirm: function(){ _runRegeneration(c); }
   });
