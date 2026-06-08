@@ -1,6 +1,72 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v72 · CANONICAL · N073/LB-5 notary self-service screens · 2026-05-13
+  acte.legal — Dashboard v73 · CANONICAL · Step-2 add-card screen + auth consistency pass · 2026-06-08
+  ───────────────────────────────────────────────────────────────
+  v72 → v73 changelog (master v?? — paid-office onboarding wizard, Step 2 of 2):
+
+  Background: paid notary offices are onboarded via email-invite. Existing
+  v72 flow ends at activation-complete (password set → reload to dashboard).
+  v73 adds a conditional second step for paid offices only: a Stripe card
+  link arrives in the activation redirect as a 'next' query param; after
+  successful activation, the dashboard shows a single-button 'add card'
+  screen pointing at that URL. Trial and partner offices (no 'next' param)
+  see no change — existing behavior preserved.
+
+  Three classes of change:
+
+  1. NEW: step2-add-card-screen.
+     - Markup: between activation-screen and reset-screen.
+     - Shown only if '?next=...' is present at activation success.
+     - Single mono uppercase label 'PASUL 2 DIN 2 — ADAUGĂ UN CARD'
+       (reusing .auth-form-lbl class — no new typography token).
+     - Primary button 'Adaugă card' → navigates to the 'next' URL (Stripe
+       card-collection page, hosted externally; returns to bare dashboard
+       URL after card add, where the existing session boots the user in).
+     - Helper text below: 'Plata abonamentului se face cu cardul.'
+
+  2. Auth consistency pass (touches all 4 existing auth screens):
+     - Removed ' ⟶' from all primary auth button labels: 'Intră în cont',
+       'Activează contul', 'Trimite link', 'Salvează parola'. JS button
+       text-restore strings (sign-in error, reset error, reset-complete
+       error, activation error) also updated to drop arrows.
+     - .auth-link font-size 12px → 14px + explicit line-height:1.2
+       (was inheriting body's 1.6 — caused perceived gap asymmetry vs
+       .auth-helper sibling on reset screen).
+     - .auth-helper font-size 12px → 14px + line-height 1.4 → 1.2
+       (matches .auth-link now; equal leading restores perceived gap
+       uniformity).
+     - Reset screen: helper text 'Trimitem un link pe email. Valabil
+       1 oră.' and back-link 'Înapoi la sign-in' consolidated into one
+       .auth-helper element with the link wrapped in a span using a
+       new .auth-helper-link class (underline, inherits grey2 colour).
+       Same id (reset-link-back) preserved so the existing JS click
+       handler binds unchanged. Obsolete '#reset-link-back margin-top:
+       -8px' nudge removed.
+
+  3. JS wiring for step-2:
+     - New showStep2AddCardScreen(nextUrl) — hides all 4 existing auth
+       screens + main-page, shows step-2, wires button onclick to
+       navigate to nextUrl.
+     - Activation success handler (after sb.functions.invoke of
+       complete-notary-activation resolves): reads 'next' from the
+       current URL params. If present → showStep2AddCardScreen(next).
+       If absent → existing window.location.search='' reload (trial /
+       partner path unchanged).
+
+  Contract with master (delivered separately):
+    - Onboarding function appends '&next=...' (url-encoded Stripe card
+      link) to the activation redirect URL for paid offices only.
+    - Supabase Auth redirect allowlist permits the 'next' query param.
+
+  No backend / RPC / EF changes from this ship. Static HTML only.
+
+  Audit invariants (v72 → v73):
+    - Backtick count: 10 (unchanged — no new template literals)
+    - Braces balanced
+    - No async/await introduced
+    - node --check passes on inline JS
+  Rollback target: notariat_dashboard_v72.html.
+
   ───────────────────────────────────────────────────────────────
   v71 → v72 changelog (master v46, N073/LB-5):
 
@@ -1613,12 +1679,12 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
 .auth-btn-primary{font-family:var(--sans);font-size:14px;color:var(--white);background:var(--ink);border:none;padding:12px 22px;cursor:pointer;transition:opacity .15s;}
 .auth-btn-primary:hover{opacity:.85;}
 .auth-btn-primary:disabled{opacity:.35;cursor:not-allowed;}
-/* v72 — N073/LB-5 self-service additions */
-.auth-link{font-family:var(--sans);font-size:12px;color:var(--grey2);text-align:center;cursor:pointer;}
+/* v72 — N073/LB-5 self-service additions; v73 — sizing + consistency pass */
+.auth-link{font-family:var(--sans);font-size:14px;line-height:1.2;color:var(--grey2);text-align:center;cursor:pointer;}
 .auth-link:hover{color:var(--ink);}
-#reset-link-back{margin-top:-8px;}
 .auth-form-inp:disabled{color:var(--grey2);cursor:not-allowed;}
-.auth-helper{font-family:var(--sans);font-size:12px;color:var(--grey2);line-height:1.4;text-align:center;}
+.auth-helper{font-family:var(--sans);font-size:14px;line-height:1.2;color:var(--grey2);text-align:center;}
+.auth-helper-link{text-decoration:underline;cursor:pointer;color:inherit;}
 .auth-success{font-family:var(--sans);font-size:13px;color:var(--ink);line-height:1.5;text-align:center;}
 </style>
 </head>
@@ -1641,7 +1707,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <input class="auth-form-inp" type="password" id="auth-pass" placeholder="••••••••" autocomplete="current-password">
     </div>
     <div class="auth-err" id="auth-err"></div>
-    <button class="auth-btn-primary" id="auth-btn">Intră în cont ⟶</button>
+    <button class="auth-btn-primary" id="auth-btn">Intră în cont</button>
     <div class="auth-link" id="auth-link-forgot">Am uitat parola</div>
   </div>
 </div>
@@ -1666,7 +1732,22 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <input class="auth-form-inp" type="password" id="activation-pass2" placeholder="••••••••" autocomplete="new-password">
     </div>
     <div class="auth-err" id="activation-err"></div>
-    <button class="auth-btn-primary" id="activation-btn">Activează contul ⟶</button>
+    <button class="auth-btn-primary" id="activation-btn">Activează contul</button>
+  </div>
+</div>
+
+<!-- ══ STEP 2 ADD-CARD SCREEN (v73, paid-office onboarding wizard) ══ -->
+<!-- URL: /?activation=complete&next=<Stripe card link> -->
+<!-- Shown after successful activation IF 'next' query param is present (paid offices only). -->
+<!-- Trial/partner offices have no 'next' → existing reload-to-dashboard path unchanged. -->
+<div class="auth-screen hidden" id="step2-add-card-screen">
+  <div class="auth-box">
+    <div class="auth-brand">
+      <div class="auth-title">acte.legal</div>
+    </div>
+    <span class="auth-form-lbl">Pasul 2 din 2 — Adaugă un card</span>
+    <button class="auth-btn-primary" id="step2-add-card-btn">Adaugă card</button>
+    <div class="auth-helper">Plata abonamentului se face cu cardul.</div>
   </div>
 </div>
 
@@ -1682,9 +1763,8 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <input class="auth-form-inp" type="email" id="reset-email" placeholder="nume@birou-notarial.ro" autocomplete="email">
     </div>
     <div class="auth-err" id="reset-err"></div>
-    <button class="auth-btn-primary" id="reset-btn">Trimite link ⟶</button>
-    <div class="auth-helper" id="reset-helper">Trimitem un link pe email. Valabil 1 oră.</div>
-    <div class="auth-link" id="reset-link-back">Înapoi la sign-in</div>
+    <button class="auth-btn-primary" id="reset-btn">Trimite link</button>
+    <div class="auth-helper" id="reset-helper"><span id="reset-helper-text">Trimitem un link pe email. Valabil 1 oră.</span> <span class="auth-helper-link" id="reset-link-back">Înapoi la sign-in</span></div>
   </div>
 </div>
 
@@ -1704,7 +1784,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <input class="auth-form-inp" type="password" id="reset-complete-pass2" placeholder="••••••••" autocomplete="new-password">
     </div>
     <div class="auth-err" id="reset-complete-err"></div>
-    <button class="auth-btn-primary" id="reset-complete-btn">Salvează parola ⟶</button>
+    <button class="auth-btn-primary" id="reset-complete-btn">Salvează parola</button>
   </div>
 </div>
 
@@ -2162,7 +2242,7 @@ document.getElementById('auth-btn').addEventListener('click', function() {
   btn.textContent = 'Se autentifică…';
   sb.auth.signInWithPassword({ email: email, password: pass }).then(function(res) {
     btn.disabled = false;
-    btn.textContent = 'Intră în cont ⟶';
+    btn.textContent = 'Intră în cont';
     if (res.error) {
       errEl.textContent = res.error.message || 'Autentificare eșuată — reîncearcă.';
       errEl.classList.add('show');
@@ -2173,7 +2253,7 @@ document.getElementById('auth-btn').addEventListener('click', function() {
     if (typeof bootLiveDashboard === 'function') bootLiveDashboard();
   }).catch(function(err) {
     btn.disabled = false;
-    btn.textContent = 'Intră în cont ⟶';
+    btn.textContent = 'Intră în cont';
     errEl.textContent = (err && err.message) || 'Autentificare eșuată — reîncearcă.';
     errEl.classList.add('show');
   });
@@ -2222,6 +2302,21 @@ function showResetCompleteScreen() {
   document.getElementById('reset-screen').classList.add('hidden');
   document.getElementById('reset-complete-screen').classList.remove('hidden');
   document.getElementById('main-page').style.display = 'none';
+}
+// v73 — Step 2 of 2 (paid-office onboarding wizard). Shown by activation
+// success handler only if a 'next' query param was present at activation time.
+// 'nextUrl' is the Stripe card-collection URL; Stripe sends user back to
+// bare dashboard URL afterwards, where the existing session boots them in.
+function showStep2AddCardScreen(nextUrl) {
+  document.getElementById('auth-screen').classList.add('hidden');
+  document.getElementById('activation-screen').classList.add('hidden');
+  document.getElementById('reset-screen').classList.add('hidden');
+  document.getElementById('reset-complete-screen').classList.add('hidden');
+  document.getElementById('step2-add-card-screen').classList.remove('hidden');
+  document.getElementById('main-page').style.display = 'none';
+  document.getElementById('step2-add-card-btn').onclick = function() {
+    window.location.href = nextUrl;
+  };
 }
 
 // URL router — runs at boot. Returns true if a self-service screen was shown
@@ -2293,7 +2388,7 @@ document.getElementById('activation-btn').addEventListener('click', function() {
   sb.auth.updateUser({ password: pass }).then(function(res) {
     if (res.error) {
       btn.disabled = false;
-      btn.textContent = 'Activează contul ⟶';
+      btn.textContent = 'Activează contul';
       errEl.textContent = res.error.message || 'Activare eșuată — reîncearcă.';
       errEl.classList.add('show');
       return;
@@ -2301,17 +2396,26 @@ document.getElementById('activation-btn').addEventListener('click', function() {
     // Step 2: tell the backend to flip setup_completed_at on the office row.
     return sb.functions.invoke('complete-notary-activation', { body: {} }).then(function(fnRes) {
       btn.disabled = false;
-      btn.textContent = 'Activează contul ⟶';
+      btn.textContent = 'Activează contul';
       if (fnRes.error) {
-        // Password is already set; flag the backend hiccup but proceed to dashboard.
+        // Password is already set; flag the backend hiccup but proceed.
         console.warn('[activation] setup_completed_at flip failed:', fnRes.error);
       }
-      // Activation complete — drop the query param and reload into the dashboard.
-      window.location.search = '';
+      // v73 — paid-office onboarding wizard:
+      // If 'next' query param is present, this is a paid office; show
+      // step-2 add-card screen pointing at the Stripe URL. Otherwise
+      // (trial / partner offices), drop the query and reload into the
+      // dashboard as before — no behaviour change for non-paid paths.
+      var nextUrl = new URLSearchParams(window.location.search).get('next');
+      if (nextUrl) {
+        showStep2AddCardScreen(nextUrl);
+      } else {
+        window.location.search = '';
+      }
     });
   }).catch(function(err) {
     btn.disabled = false;
-    btn.textContent = 'Activează contul ⟶';
+    btn.textContent = 'Activează contul';
     errEl.textContent = (err && err.message) || 'Activare eșuată — reîncearcă.';
     errEl.classList.add('show');
   });
@@ -2338,7 +2442,7 @@ document.getElementById('reset-btn').addEventListener('click', function() {
   // Invoke the EF that owns: auth.resetPasswordForEmail() + render_and_send_b2b_email
   sb.functions.invoke('send-notary-password-reset', { body: { email: email } }).then(function(res) {
     btn.disabled = false;
-    btn.textContent = 'Trimite link ⟶';
+    btn.textContent = 'Trimite link';
     if (res.error) {
       errEl.textContent = (res.error && res.error.message) || 'Trimitere eșuată — reîncearcă.';
       errEl.classList.add('show');
@@ -2347,10 +2451,10 @@ document.getElementById('reset-btn').addEventListener('click', function() {
     // Always show success copy regardless of email-existence (prevents user enumeration).
     btn.style.display = 'none';
     document.getElementById('reset-email').disabled = true;
-    document.getElementById('reset-helper').innerHTML = '<span class="auth-success">Dacă adresa există, vei primi linkul pe email.</span>';
+    document.getElementById('reset-helper-text').innerHTML = '<span class="auth-success">Dacă adresa există, vei primi linkul pe email.</span>';
   }).catch(function(err) {
     btn.disabled = false;
-    btn.textContent = 'Trimite link ⟶';
+    btn.textContent = 'Trimite link';
     errEl.textContent = (err && err.message) || 'Trimitere eșuată — reîncearcă.';
     errEl.classList.add('show');
   });
@@ -2385,7 +2489,7 @@ document.getElementById('reset-complete-btn').addEventListener('click', function
   btn.textContent = 'Se salvează…';
   sb.auth.updateUser({ password: pass }).then(function(res) {
     btn.disabled = false;
-    btn.textContent = 'Salvează parola ⟶';
+    btn.textContent = 'Salvează parola';
     if (res.error) {
       errEl.textContent = res.error.message || 'Salvare eșuată — reîncearcă.';
       errEl.classList.add('show'); return;
@@ -2394,7 +2498,7 @@ document.getElementById('reset-complete-btn').addEventListener('click', function
     window.location.search = '';
   }).catch(function(err) {
     btn.disabled = false;
-    btn.textContent = 'Salvează parola ⟶';
+    btn.textContent = 'Salvează parola';
     errEl.textContent = (err && err.message) || 'Salvare eșuată — reîncearcă.';
     errEl.classList.add('show');
   });
