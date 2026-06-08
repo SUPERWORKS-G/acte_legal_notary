@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v73 · CANONICAL · Step-2 add-card screen + auth consistency pass · 2026-06-08
+  acte.legal — Dashboard v74 · CANONICAL · Step-2 mono label simplified · 2026-06-08
+  ───────────────────────────────────────────────────────────────
+  v73 → v74 changelog (cosmetic):
+
+  Step-2 add-card screen — mono label simplified:
+    'Pasul 2 din 2 — Adaugă un card'  →  'Pasul 2 din 2'
+  The heading function is now carried by the button label 'Adaugă card'.
+  Helper text under the button ('Plata abonamentului se face cu cardul.')
+  is unchanged. Single one-line markup change, no JS or CSS touched.
+
+  Audit invariants (v73 → v74):
+    - Backtick count: 10 (unchanged)
+    - Braces balanced
+    - No async/await introduced
+    - node --check passes on inline JS
+  Rollback target: notariat_dashboard_v73.html.
+
+  ───────────────────────────────────────────────────────────────
+  acte.legal — Dashboard v73 · Step-2 add-card screen + auth consistency pass · 2026-06-08
   ───────────────────────────────────────────────────────────────
   v72 → v73 changelog (master v?? — paid-office onboarding wizard, Step 2 of 2):
 
@@ -1745,7 +1763,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
     <div class="auth-brand">
       <div class="auth-title">acte.legal</div>
     </div>
-    <span class="auth-form-lbl">Pasul 2 din 2 — Adaugă un card</span>
+    <span class="auth-form-lbl">Pasul 2 din 2</span>
     <button class="auth-btn-primary" id="step2-add-card-btn">Adaugă card</button>
     <div class="auth-helper">Plata abonamentului se face cu cardul.</div>
   </div>
