@@ -1,6 +1,43 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Trial conversion page (planuri_v02) · 2026-06-11
+  acte.legal — Trial conversion page (planuri_v03) · 2026-06-11
+  ───────────────────────────────────────────────────────────────
+  v02 → v03 changelog (George 2026-06-11 — mobile differentiation + copy + price format):
+
+    Bug class: visual grouping. On mobile (<960px) the three stacked
+    plan cards read as one continuous list — internal 16px gaps vs a
+    48px inter-card void gave too little proximity contrast, and with
+    no boundary marker the eye could not identify where a plan starts
+    and ends at a glance. George confirmed via live phone screenshot.
+
+    Fix approach (mockup-first: A hairline divider, B spacing-only,
+    A-v2/C/D/E refinements — George selected C):
+    - NEW mobile-only media block, max-width:959px ('boxed card'):
+      each .plan-card gets a 1px solid var(--rule) border + 24px
+      padding; .plans-row gap drops 48px -> 32px. Every plan now has
+      a visible top AND bottom edge. Desktop block (min-width:960px)
+      untouched and unreachable by the new rules.
+    - COPY (both desktop + mobile, shared strings): trial-end line
+      now 'Perioada gratuită se încheie la <data>.' (was 'Perioada
+      de probă se încheie la <data>.'); second heading now 'Alegeți
+      un plan.' (was 'Alegeți un plan pentru a continua.').
+      NOTE: the matching email subject for notary_trial_ending is
+      email-chat scope — flagged to George for relay to master.
+    - PRICE FORMAT (both): buildPlanCard renders price_ron with a
+      dot thousand separator via an ES5 regex on String(price_ron)
+      -> '2.000 RON', '4.000 RON', '5.000 RON'. Works for any
+      future integer price.
+
+    Touched: CSS plans-row section (one new media block), static
+    heading line in #state-main, renderMainState trial-end string,
+    buildPlanCard price line. Untouched: everything else — state
+    machine, EF calls, error mapping, desktop layout, tokens.
+
+    Audit invariants (v02 -> v03): backticks 0 (unchanged), braces
+    balanced 79/79 (was 75/75; +3 pairs CSS media block, +1 pair in
+    the price regex quantifier), no async/await, node --check PASS.
+    Rollback target: planuri_v02.html.
+
   ───────────────────────────────────────────────────────────────
   v01 → v02 changelog (Master 2026-06-11 — contract follow-ups settled):
     - §4.1 ADOPTED: EF now returns 'volume: { headline, caption }' per tier.
@@ -92,6 +129,11 @@
   .plan-line{font-family:var(--sans);font-size:14px;color:var(--grey2);line-height:1.4;}
   .plan-meta{display:flex;flex-direction:column;gap:0;}
   .plan-meta > .plan-line{line-height:1.2;}
+  /* mobile-only (v03): boxed card — explicit plan boundaries on the stacked layout */
+  @media (max-width:959px){
+    .plans-row{gap:32px;}
+    .plan-card{border:1px solid var(--rule);padding:24px;}
+  }
   @media (min-width:960px){
     .plans-row{flex-direction:row;gap:32px;align-items:flex-start;}
     .plans-row > .plan-card{flex:1;}
@@ -126,7 +168,7 @@
     <div class="auth-form-lbl" id="office-name"></div>
     <div class="page-heading">
       <div class="auth-title" id="trial-end-line"></div>
-      <div class="auth-title">Alegeți un plan pentru a continua.</div>
+      <div class="auth-title">Alegeți un plan.</div>
     </div>
   </div>
   <div class="plans-row" id="plans-row">
@@ -269,7 +311,7 @@ function buildPlanCard(tier) {
   captionEl.textContent = (tier.volume && tier.volume.caption) || '';
   var priceEl = document.createElement('div');
   priceEl.className = 'plan-line';
-  priceEl.textContent = tier.price_ron + ' RON';
+  priceEl.textContent = String(tier.price_ron).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ' RON';
   metaEl.appendChild(captionEl);
   metaEl.appendChild(priceEl);
   card.appendChild(metaEl);
@@ -297,7 +339,7 @@ function buildPlanCard(tier) {
 function renderMainState(ctx) {
   document.getElementById('office-name').textContent = ctx.office_name || '';
   document.getElementById('trial-end-line').textContent =
-    'Perioada de probă se încheie la ' + ctx.trial_ends_at_ro + '.';
+    'Perioada gratuită se încheie la ' + ctx.trial_ends_at_ro + '.';
   var row = document.getElementById('plans-row');
   row.innerHTML = '';
   (ctx.tiers || []).forEach(function(tier) {
