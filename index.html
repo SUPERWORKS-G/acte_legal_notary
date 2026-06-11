@@ -1,6 +1,44 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Dashboard v74 · CANONICAL · Step-2 mono label simplified · 2026-06-08
+  acte.legal — Dashboard v75 · CANONICAL · Casual-register copy sweep · 2026-06-11
+  ───────────────────────────────────────────────────────────────
+  v74 → v75 changelog (register alignment — master work order 2026-06-11):
+
+  Bug class: copy register drift. George's audit of address register
+  across all customer-facing copy found the established canon is the
+  casual tu-form (all locked B2B/B2C emails use it); the dashboard
+  carried 12 polite-form occurrences (Selectați / Confirmați /
+  Marcați / Încercați / Refaceți). Rule going forward: all
+  user-facing copy uses the casual register; polite forms are bugs.
+
+  Fix approach: 12 surgical string swaps (9 unique strings), pure
+  copy — no logic, layout, markup structure, or contract changes.
+    'Selectați un dosar din lista de mai sus' → 'Selectează …' (x1)
+    'Selectați un dosar' → 'Selectează un dosar' (x1)
+    'Marcați manual' → 'Marchează manual' (x1)
+    'Selectați un document' → 'Selectează un document' (x2)
+    'Confirmați programarea pentru a prepara actul.'
+      → 'Confirmă programarea pentru a prepara actul.' (x2)
+    'încercați din nou' → 'încearcă din nou' (x1)
+    'Încercați din nou' → 'Încearcă din nou' (x1)
+    'Refaceți actul? Versiunea curentă va fi înlocuită.'
+      → 'Refaci actul? …' (x1)
+    'Selectați data și ora pentru programare.'
+      → 'Selectează data și ora pentru programare.' (x2 — one is
+      the header comment near the picker section, updated so the
+      quoted copy stays accurate; 11 swaps are user-visible)
+  Superstring ordering honored: the 'din lista de mai sus' variant
+  swapped before the bare 'Selectați un dosar'.
+
+  Touched: 12 text occurrences across empty states, toasts, the
+  prep-error sub-line, the refacere confirm body, the FINALIZAT
+  note, and one header comment. Untouched: everything else — all
+  JS logic, CSS, markup structure, EF calls, RPC wiring.
+
+  Audit invariants (v74 → v75): backticks 10 (unchanged), braces
+  1114/1114, async/await comment-only, node --check PASS.
+  Rollback target: notariat_dashboard_v74.html.
+
   ───────────────────────────────────────────────────────────────
   v73 → v74 changelog (cosmetic):
 
@@ -842,7 +880,7 @@
      querySelector('.btn-confirm', wrapper) — no new ids needed.
      New CSS: .btn-confirm:disabled / [disabled] (+ :hover and
      :active overrides). The original toast in confirmProgramare
-     ("Selectați data și ora pentru programare.") is kept as a
+     ("Selectează data și ora pentru programare.") is kept as a
      last-line defense — should never fire in practice now.
      Closes the silent-fail path for cases with both
      preferred_at and preferred_time_interval NULL.
@@ -1948,7 +1986,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
       <div class="va-list-scroll" id="va-list-scroll"></div>
     </div>
     <div class="va-detail">
-      <div class="va-empty" id="va-empty"><div class="va-empty-glyph">—</div><span>Selectați un dosar</span></div>
+      <div class="va-empty" id="va-empty"><div class="va-empty-glyph">—</div><span>Selectează un dosar</span></div>
       <div class="va-detail-view" id="va-view">
         <div class="va-dh">
           <span class="va-list-hdr-label">Detalii</span>
@@ -2000,7 +2038,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
     </div>
     <div class="vb-spacer"></div>
     <div class="vb-detail" id="vb-detail">
-      <div class="vb-empty" id="vb-empty"><div class="vb-empty-glyph">—</div><span>Selectați un dosar din lista de mai sus</span></div>
+      <div class="vb-empty" id="vb-empty"><div class="vb-empty-glyph">—</div><span>Selectează un dosar din lista de mai sus</span></div>
       <div class="vb-open" id="vb-open">
         <div class="vb-dh">
           <div class="vb-dh-name" id="vb-name">—</div>
@@ -2096,7 +2134,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
     <div class="fin-title">De finalizat</div>
     <span class="fin-badge" id="fin-count">0 dosare</span>
   </div>
-  <p class="fin-note">Dosare cu programare trecută, în așteptarea confirmării semnării și achitării onorariului. <strong>Marcați manual</strong> după ce clientul a semnat și a plătit.</p>
+  <p class="fin-note">Dosare cu programare trecută, în așteptarea confirmării semnării și achitării onorariului. <strong>Marchează manual</strong> după ce clientul a semnat și a plătit.</p>
   <div class="fin-tbl-hdr"><span>#</span><span>Act</span><span>Client</span><span></span><span>Programat</span><span></span></div>
   <div id="fin-rows"></div>
 </div>
@@ -2140,7 +2178,7 @@ html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webk
   </div>
   <div class="ci-modal-body">
     <div class="ci-img-pane" id="doc-preview-pane">
-      <div class="doc-preview-empty">Selectați un document</div>
+      <div class="doc-preview-empty">Selectează un document</div>
     </div>
     <div class="ci-fields-pane">
       <div id="doc-list"></div>
@@ -2731,7 +2769,7 @@ function prepareAct(){
   if(!c){ showToast('Niciun dosar activ'); return; }
   // Client-side gate: status must be 'in-lucru' (UI vocab; schema 'in_review') for prep to proceed.
   // Edge Function enforces the same precondition server-side and returns 409 invalid_status if violated.
-  if(c.status === 'nou'){ showToast('Confirmați programarea pentru a prepara actul.'); return; }
+  if(c.status === 'nou'){ showToast('Confirmă programarea pentru a prepara actul.'); return; }
 
   // Find the active prep button across the 3 views and flip into "generating" state.
   var btn = document.getElementById('va-prep-btn') || document.getElementById('vb-prep-btn') || document.getElementById('vc-prep-btn');
@@ -2800,7 +2838,7 @@ function prepareAct(){
       }
     } catch(e){}
 
-    var toastMsg = 'Pregătirea a eșuat · încercați din nou';
+    var toastMsg = 'Pregătirea a eșuat · încearcă din nou';
     if (errCode === 409 || /invalid_status/i.test(serverMsg)) {
       toastMsg = 'Cazul nu este pregătit pentru generare — verifică starea';
     } else if (/template/i.test(serverMsg) || /no_template/i.test(serverMsg)) {
@@ -3742,7 +3780,7 @@ function renderPrepSlot(prefix, c){
       '<div class="prep-error">'
       +   '<div class="prep-error-meta">'
       +     '<div class="prep-error-lbl">Pregătirea a eșuat<span class="discrepancy-dot"></span></div>'
-      +     '<div class="prep-error-sub">Încercați din nou</div>'
+      +     '<div class="prep-error-sub">Încearcă din nou</div>'
       +   '</div>'
       +   '<button class="btn-prep btn-prep-secondary" onclick="retryPrepareAct()" title="Încearcă din nou">Încearcă din nou<svg class="btn-glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13.5 3v3.5H10"/><path d="M13.2 6.4A5.5 5.5 0 1 0 13.5 10"/></svg></button>'
       + '</div>';
@@ -3785,7 +3823,7 @@ function renderPrepSlot(prefix, c){
   }
   // DISABLED state — case still NOU, notary hasn't confirmed
   if(c.status === 'nou'){
-    var tip = 'Confirmați programarea pentru a prepara actul.';
+    var tip = 'Confirmă programarea pentru a prepara actul.';
     slot.innerHTML =
       '<span class="btn-prep-wrap" data-tip="'+tip+'">'
       +   '<button class="btn-prep" id="'+prefix+'-prep-btn" disabled title="'+tip+'" onclick="prepareAct()">Pregătește act ↓</button>'
@@ -4000,7 +4038,7 @@ function regenerateAct(){
   if(c.status !== 'programat' || !c.prepared){ showToast('Nimic de refăcut'); return; }
   showConfirm({
     title: 'Refă actul',
-    body: 'Refaceți actul? Versiunea curentă va fi înlocuită.',
+    body: 'Refaci actul? Versiunea curentă va fi înlocuită.',
     confirmLabel: 'Refă actul',
     cancelLabel: 'Anulează',
     onConfirm: function(){ _runRegeneration(c); }
@@ -4823,7 +4861,7 @@ function confirmProgramare(){
   // Validate: both date and time are required to call the RPC. Without them there's no
   // scheduled_at to commit. (Squarespace + form-mandatory contract guarantee non-empty in prod.)
   if(!c.date || !c.time){
-    showToast('Selectați data și ora pentru programare.');
+    showToast('Selectează data și ora pentru programare.');
     return;
   }
   // Build ISO timestamptz to send to the RPC.
@@ -5208,7 +5246,7 @@ function openDocModal(caseId){
   openDocMenuIdx=-1;
   editingDocIdx=-1;
   renderDocList();
-  document.getElementById('doc-preview-pane').innerHTML='<div class="doc-preview-empty">Selectați un document</div>';
+  document.getElementById('doc-preview-pane').innerHTML='<div class="doc-preview-empty">Selectează un document</div>';
   document.getElementById('doc-dl-btn').disabled=true;
   document.getElementById('doc-overlay').classList.add('show');
   document.getElementById('doc-modal').classList.add('show');
