@@ -1,6 +1,23 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Trial conversion page (planuri_v01) · 2026-06-10
+  acte.legal — Trial conversion page (planuri_v02) · 2026-06-11
+  ───────────────────────────────────────────────────────────────
+  v01 → v02 changelog (Master 2026-06-11 — contract follow-ups settled):
+    - §4.1 ADOPTED: EF now returns 'volume: { headline, caption }' per tier.
+      Removed the client-side string-parse (parseVolume) and Pro hard-code.
+      The page reads tier.volume.headline + tier.volume.caption directly.
+    - §4.2 Option A ADOPTED: 'volume_footnote' per tier carries the
+      footnote text on Pro ('listare prioritară pe website'), null on
+      Start/Plus. 'perks' array is gone from the response. Removed the
+      Pro-tier hard-coded footnote in buildPlanCard; replaced with a
+      tier.volume_footnote truthiness check.
+    - §4.3 CONFIRMED: 'contact@acte.legal' stays as the support address;
+      unchanged.
+
+  Error mapping unchanged from v01 (master confirmed: 410 also covers the
+  canceled-subscription / dead-trial case — already handled by the expired
+  state, no code change needed).
+
   ───────────────────────────────────────────────────────────────
   Standalone token-based landing page for paid-tier conversion at the end
   of a notary office's free trial. Reached from a transactional email link
@@ -9,9 +26,11 @@
   Page flow:
     1. Read 'token' from URL.
     2. Call EF 'get-trial-conversion-context' with { token }.
-       Response shape (per Master's Addendum 1, 2026-06-10):
+       Response shape (canonical per Master 2026-06-11):
          { ok:true, office_name, trial_ends_at_ro,
-           tiers:[ { tier, label, price_ron, volume, perks:[] }, ... ] }
+           tiers:[ { tier, label, price_ron,
+                     volume:{ headline, caption },
+                     volume_footnote: <string|null> }, ... ] }
        Error mapping:
          404 token_not_found / 410 token_expired → state EXPIRED
          409 already_converted                   → state ALREADY-CONVERTED
@@ -31,14 +50,6 @@
       headings, state-5 contact pair).
     - All primitives cloned from notariat_dashboard_v74.html (.auth-title,
       .auth-form-lbl, .auth-btn-primary, .auth-helper, .auth-helper-link).
-
-  Known follow-up (sent to Master separately):
-    - The volume split (number serif + unit sans) and Pro's "Nelimitat &
-      Prioritar⁺" headline cannot be derived cleanly from the current EF
-      'volume: <string>' shape. This page parses the string client-side and
-      hard-codes Pro's special headline. Once Master ships the structured
-      contract 'volume: { headline, caption }' per plan, the client-side
-      parse + Pro hard-code should be removed.
 -->
 <html lang="ro">
 <head>
@@ -224,22 +235,17 @@ function routeErrorToState(error) {
 // ══════════════════════════════════════════════════════════════════
 // PLAN CARD RENDERING
 // ══════════════════════════════════════════════════════════════════
-// TODO (pending Master's structured-volume contract): the EF currently
-// returns 'volume: <string>' per plan. To honour the Version-B design
-// (big serif number + small sans caption, with Pro's "Nelimitat & Prioritar⁺"
-// headline), we parse the string here and hard-code Pro's special. Once
-// the EF returns 'volume: { headline, caption }', replace this with a
-// straight read of those fields and drop the Pro tier special-case.
-function parseVolume(tier) {
-  if (tier.tier === 'pro') {
-    // Pro special — designed alongside George 2026-06-10.
-    return { headline: 'Nelimitat &amp; Prioritar<sup>+</sup>', caption: 'dosare/lună' };
-  }
-  // Start / Plus / future numbered tiers: extract leading integer.
-  var m = String(tier.volume || '').match(/^(\d+)\s+(.+)$/);
-  if (m) return { headline: m[1], caption: m[2] };
-  // Unknown shape — render whole string as headline, empty caption.
-  return { headline: String(tier.volume || ''), caption: '' };
+// Headline rendering: the EF returns the literal string ('50', '150',
+// 'Nelimitat & Prioritar+'). We HTML-escape it so '&' renders safely,
+// then wrap any '+' character in <sup>...</sup> so the design's
+// superscript marker appears. This also covers the footnote line,
+// where the leading '+' becomes the visible reference marker.
+function renderWithSupPlus(str) {
+  var safe = String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return safe.replace(/\+/g, '<sup>+</sup>');
 }
 
 function buildPlanCard(tier) {
@@ -251,17 +257,16 @@ function buildPlanCard(tier) {
   nameEl.textContent = tier.label;
   card.appendChild(nameEl);
 
-  var v = parseVolume(tier);
   var headlineEl = document.createElement('div');
   headlineEl.className = 'plan-headline';
-  headlineEl.innerHTML = v.headline; // innerHTML to render the <sup> tag in Pro's headline
+  headlineEl.innerHTML = renderWithSupPlus(tier.volume && tier.volume.headline);
   card.appendChild(headlineEl);
 
   var metaEl = document.createElement('div');
   metaEl.className = 'plan-meta';
   var captionEl = document.createElement('div');
   captionEl.className = 'plan-line';
-  captionEl.textContent = v.caption;
+  captionEl.textContent = (tier.volume && tier.volume.caption) || '';
   var priceEl = document.createElement('div');
   priceEl.className = 'plan-line';
   priceEl.textContent = tier.price_ron + ' RON';
@@ -275,11 +280,14 @@ function buildPlanCard(tier) {
   btn.onclick = function() { selectPlan(tier.tier, btn); };
   card.appendChild(btn);
 
-  // Pro footnote (design Version B). TODO: derive from tier.perks once Master ships the matched perks contract.
-  if (tier.tier === 'pro') {
+  // Footnote line — rendered only when tier.volume_footnote is non-empty.
+  // Prefixed with a <sup>+</sup> marker that matches the '+' in the headline.
+  if (tier.volume_footnote) {
     var fn = document.createElement('div');
     fn.className = 'plan-line';
-    fn.innerHTML = '<sup>+</sup> listare prioritară pe website';
+    var bodyEscaped = String(tier.volume_footnote)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    fn.innerHTML = '<sup>+</sup> ' + bodyEscaped;
     card.appendChild(fn);
   }
 
