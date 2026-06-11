@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<!--
+  acte.legal — Trial conversion page (planuri_v01) · 2026-06-10
+  ───────────────────────────────────────────────────────────────
+  Standalone token-based landing page for paid-tier conversion at the end
+  of a notary office's free trial. Reached from a transactional email link
+  with '?token=<uuid>' — no Supabase login session is used.
+
+  Page flow:
+    1. Read 'token' from URL.
+    2. Call EF 'get-trial-conversion-context' with { token }.
+       Response shape (per Master's Addendum 1, 2026-06-10):
+         { ok:true, office_name, trial_ends_at_ro,
+           tiers:[ { tier, label, price_ron, volume, perks:[] }, ... ] }
+       Error mapping:
+         404 token_not_found / 410 token_expired → state EXPIRED
+         409 already_converted                   → state ALREADY-CONVERTED
+         5xx / network                           → state ERROR
+    3. On success, populate state MAIN with office name + trial date + 3 plan cards.
+    4. When user picks a plan, call EF 'start-trial-conversion' with { token, tier }.
+    5. On success, redirect to 'setup_url' (Stripe-hosted card form).
+       After card add, Stripe returns the user to bare https://notar.acte.legal/
+       and the existing session-less load runs to sign-in screen.
+
+  Design language:
+    - 2 pixel sizes total (24px serif + 14px sans), 1 small label register
+      (11px mono uppercase) for office name + plan names.
+    - Left-aligned throughout; button text centred by virtue of full-width button.
+    - Canonical 16px inter-element gap, 24px before/after the primary button
+      (via 8px symmetric margin), 0px for tight clusters (caption+price, two-line
+      headings, state-5 contact pair).
+    - All primitives cloned from notariat_dashboard_v74.html (.auth-title,
+      .auth-form-lbl, .auth-btn-primary, .auth-helper, .auth-helper-link).
+
+  Known follow-up (sent to Master separately):
+    - The volume split (number serif + unit sans) and Pro's "Nelimitat &
+      Prioritar⁺" headline cannot be derived cleanly from the current EF
+      'volume: <string>' shape. This page parses the string client-side and
+      hard-codes Pro's special headline. Once Master ships the structured
+      contract 'volume: { headline, caption }' per plan, the client-side
+      parse + Pro hard-code should be removed.
+-->
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>acte.legal — Alegeți un plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --ink:#000000; --white:#fafaf8; --red:#d42b2b; --red-lt:#f5e0e0;
+    --grey:#555; --grey2:#999; --rule:#dddbd5; --bg:#f3f2ef;
+    --mono:'IBM Plex Mono',monospace; --sans:'IBM Plex Sans',sans-serif; --serif:'DM Serif Display',Georgia,serif;
+  }
+  html,body{background:var(--white);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;font-size:14px;line-height:1.6;}
+
+  /* ══ v74 primitives (verbatim) ══ */
+  .auth-title{font-family:var(--serif);font-size:24px;color:var(--ink);line-height:1.2;}
+  .auth-form-lbl{font-family:var(--mono);font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--grey2);}
+  .auth-btn-primary{font-family:var(--sans);font-size:14px;color:var(--white);background:var(--ink);border:none;padding:12px 22px;cursor:pointer;transition:opacity .15s;width:100%;}
+  .auth-btn-primary:hover{opacity:.85;}
+  .auth-btn-primary:disabled{opacity:.35;cursor:not-allowed;}
+  .auth-helper{font-family:var(--sans);font-size:14px;line-height:1.4;color:var(--grey2);text-align:left;}
+  .auth-helper-link{text-decoration:underline;cursor:pointer;color:inherit;}
+
+  /* ══ page layout ══ */
+  .page{max-width:1000px;margin:0 auto;padding:64px 32px 96px;}
+  .page-brand{margin-bottom:64px;}
+  .page-header{display:flex;flex-direction:column;gap:16px;margin-bottom:64px;}
+  .page-heading{display:flex;flex-direction:column;gap:0;}
+  .page-footer{margin-top:64px;}
+
+  /* ══ plans row ══ */
+  .plans-row{display:flex;flex-direction:column;gap:48px;align-items:stretch;}
+  .plan-card{display:flex;flex-direction:column;gap:16px;text-align:left;}
+  .plan-card > .auth-btn-primary{margin:8px 0;}
+  .plan-headline{font-family:var(--serif);font-size:24px;color:var(--ink);line-height:1.2;}
+  .plan-line{font-family:var(--sans);font-size:14px;color:var(--grey2);line-height:1.4;}
+  .plan-meta{display:flex;flex-direction:column;gap:0;}
+  .plan-meta > .plan-line{line-height:1.2;}
+  @media (min-width:960px){
+    .plans-row{flex-direction:row;gap:32px;align-items:flex-start;}
+    .plans-row > .plan-card{flex:1;}
+  }
+
+  /* ══ superscript: 0.75em base; footnote sup overridden to 1em for legibility at the 14px sans base ══ */
+  sup{font-size:0.75em;vertical-align:super;line-height:0;}
+  .plan-line sup{font-size:1em;}
+
+  /* ══ action wrapper for states 4/5 ══ */
+  .action-block{max-width:280px;display:flex;flex-direction:column;gap:16px;}
+  .action-contact{display:flex;flex-direction:column;gap:0;}
+
+  /* ══ state machine ══ */
+  .state{display:none;}
+  .state.active{display:block;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+
+<!-- ══ STATE 1 — LOADING (default visible) ══ -->
+<div class="page state active" id="state-loading">
+  <div class="page-brand"><div class="auth-title">acte.legal</div></div>
+  <div class="auth-helper">Se încarcă…</div>
+</div>
+
+<!-- ══ STATE 2 — MAIN ══ -->
+<div class="page state" id="state-main">
+  <div class="page-brand"><div class="auth-title">acte.legal</div></div>
+  <div class="page-header">
+    <div class="auth-form-lbl" id="office-name"></div>
+    <div class="page-heading">
+      <div class="auth-title" id="trial-end-line"></div>
+      <div class="auth-title">Alegeți un plan pentru a continua.</div>
+    </div>
+  </div>
+  <div class="plans-row" id="plans-row">
+    <!-- 3 plan cards injected by JS -->
+  </div>
+  <div class="page-footer">
+    <div class="auth-helper">Întrebări? Scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+  </div>
+</div>
+
+<!-- ══ STATE 3 — LINK EXPIRED / INVALID (404 · 410) ══ -->
+<div class="page state" id="state-expired">
+  <div class="page-brand"><div class="auth-title">acte.legal</div></div>
+  <div class="page-header">
+    <div class="page-heading">
+      <div class="auth-title">Linkul a expirat.</div>
+    </div>
+    <div class="auth-helper">Pentru un link nou, scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+  </div>
+</div>
+
+<!-- ══ STATE 4 — ALREADY CONVERTED (409) ══ -->
+<div class="page state" id="state-already-converted">
+  <div class="page-brand"><div class="auth-title">acte.legal</div></div>
+  <div class="page-header">
+    <div class="page-heading">
+      <div class="auth-title">Linkul a fost deja folosit.</div>
+    </div>
+    <div class="auth-helper">Contul este activ.</div>
+  </div>
+  <div class="action-block">
+    <button class="auth-btn-primary" id="goto-dashboard-btn">Intră în cont</button>
+  </div>
+</div>
+
+<!-- ══ STATE 5 — NETWORK / 5xx ERROR ══ -->
+<div class="page state" id="state-error">
+  <div class="page-brand"><div class="auth-title">acte.legal</div></div>
+  <div class="page-header">
+    <div class="page-heading">
+      <div class="auth-title">A apărut o eroare.</div>
+    </div>
+    <div class="auth-helper">Vă rugăm să reîncercați.</div>
+  </div>
+  <div class="action-block">
+    <button class="auth-btn-primary" id="retry-btn">Reîncearcă</button>
+    <div class="action-contact">
+      <div class="auth-helper">Persistă problema?</div>
+      <div class="auth-helper">Scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ══════════════════════════════════════════════════════════════════
+// SUPABASE WIRING — matches notariat_dashboard_v74. ES5 + Promises only.
+// ══════════════════════════════════════════════════════════════════
+var SUPABASE_URL = 'https://geuogfnlybyrsnlrjdit.supabase.co';
+var SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_kd6KYiBJG_MKQJJsSTOa3Q_rGljVwoX';
+var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+// Dashboard URL used by state 4's "Intră în cont" button.
+var DASHBOARD_URL = 'https://notar.acte.legal/';
+
+// Module-level cache: the token from the URL, and the loaded context.
+// 'pendingToken' is read once at boot; preserved for the start-trial-conversion call.
+var pendingToken = null;
+
+// ══════════════════════════════════════════════════════════════════
+// STATE MACHINE
+// ══════════════════════════════════════════════════════════════════
+function showState(name) {
+  var states = document.querySelectorAll('.state');
+  for (var i = 0; i < states.length; i++) {
+    states[i].classList.remove('active');
+  }
+  document.getElementById('state-' + name).classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ERROR ROUTING — maps EF error shapes to states.
+// Supabase's functions.invoke returns { data, error }. The error object
+// surfaces HTTP status under 'error.context.status' in supabase-js v2.
+// Defensive: also inspect error.message for known string codes.
+// ══════════════════════════════════════════════════════════════════
+function routeErrorToState(error) {
+  var status = null;
+  if (error && error.context && typeof error.context.status === 'number') {
+    status = error.context.status;
+  } else if (error && typeof error.status === 'number') {
+    status = error.status;
+  }
+  var msg = (error && error.message) ? String(error.message).toLowerCase() : '';
+
+  if (status === 404 || status === 410 ||
+      msg.indexOf('token_not_found') !== -1 || msg.indexOf('token_expired') !== -1) {
+    showState('expired');
+  } else if (status === 409 || msg.indexOf('already_converted') !== -1) {
+    showState('already-converted');
+  } else {
+    showState('error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PLAN CARD RENDERING
+// ══════════════════════════════════════════════════════════════════
+// TODO (pending Master's structured-volume contract): the EF currently
+// returns 'volume: <string>' per plan. To honour the Version-B design
+// (big serif number + small sans caption, with Pro's "Nelimitat & Prioritar⁺"
+// headline), we parse the string here and hard-code Pro's special. Once
+// the EF returns 'volume: { headline, caption }', replace this with a
+// straight read of those fields and drop the Pro tier special-case.
+function parseVolume(tier) {
+  if (tier.tier === 'pro') {
+    // Pro special — designed alongside George 2026-06-10.
+    return { headline: 'Nelimitat &amp; Prioritar<sup>+</sup>', caption: 'dosare/lună' };
+  }
+  // Start / Plus / future numbered tiers: extract leading integer.
+  var m = String(tier.volume || '').match(/^(\d+)\s+(.+)$/);
+  if (m) return { headline: m[1], caption: m[2] };
+  // Unknown shape — render whole string as headline, empty caption.
+  return { headline: String(tier.volume || ''), caption: '' };
+}
+
+function buildPlanCard(tier) {
+  var card = document.createElement('div');
+  card.className = 'plan-card';
+
+  var nameEl = document.createElement('div');
+  nameEl.className = 'auth-form-lbl';
+  nameEl.textContent = tier.label;
+  card.appendChild(nameEl);
+
+  var v = parseVolume(tier);
+  var headlineEl = document.createElement('div');
+  headlineEl.className = 'plan-headline';
+  headlineEl.innerHTML = v.headline; // innerHTML to render the <sup> tag in Pro's headline
+  card.appendChild(headlineEl);
+
+  var metaEl = document.createElement('div');
+  metaEl.className = 'plan-meta';
+  var captionEl = document.createElement('div');
+  captionEl.className = 'plan-line';
+  captionEl.textContent = v.caption;
+  var priceEl = document.createElement('div');
+  priceEl.className = 'plan-line';
+  priceEl.textContent = tier.price_ron + ' RON';
+  metaEl.appendChild(captionEl);
+  metaEl.appendChild(priceEl);
+  card.appendChild(metaEl);
+
+  var btn = document.createElement('button');
+  btn.className = 'auth-btn-primary';
+  btn.textContent = 'Alege';
+  btn.onclick = function() { selectPlan(tier.tier, btn); };
+  card.appendChild(btn);
+
+  // Pro footnote (design Version B). TODO: derive from tier.perks once Master ships the matched perks contract.
+  if (tier.tier === 'pro') {
+    var fn = document.createElement('div');
+    fn.className = 'plan-line';
+    fn.innerHTML = '<sup>+</sup> listare prioritară pe website';
+    card.appendChild(fn);
+  }
+
+  return card;
+}
+
+function renderMainState(ctx) {
+  document.getElementById('office-name').textContent = ctx.office_name || '';
+  document.getElementById('trial-end-line').textContent =
+    'Perioada de probă se încheie la ' + ctx.trial_ends_at_ro + '.';
+  var row = document.getElementById('plans-row');
+  row.innerHTML = '';
+  (ctx.tiers || []).forEach(function(tier) {
+    row.appendChild(buildPlanCard(tier));
+  });
+  showState('main');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// EF CALLS
+// ══════════════════════════════════════════════════════════════════
+function loadContext() {
+  showState('loading');
+  if (!pendingToken) {
+    showState('expired');
+    return;
+  }
+  sb.functions.invoke('get-trial-conversion-context', { body: { token: pendingToken } })
+    .then(function(res) {
+      if (res.error) { routeErrorToState(res.error); return; }
+      if (!res.data || !res.data.ok) { showState('error'); return; }
+      renderMainState(res.data);
+    })
+    .catch(function(err) {
+      console.warn('[planuri] get-trial-conversion-context threw:', err);
+      showState('error');
+    });
+}
+
+function selectPlan(tierSlug, btn) {
+  // Disable all plan buttons to prevent double-clicks while the EF is in flight.
+  var allBtns = document.querySelectorAll('#plans-row .auth-btn-primary');
+  for (var i = 0; i < allBtns.length; i++) { allBtns[i].disabled = true; }
+  if (btn) { btn.textContent = 'Se procesează…'; }
+
+  sb.functions.invoke('start-trial-conversion', { body: { token: pendingToken, tier: tierSlug } })
+    .then(function(res) {
+      if (res.error) { routeErrorToState(res.error); return; }
+      if (!res.data || !res.data.ok || !res.data.setup_url) {
+        showState('error');
+        return;
+      }
+      // Hand off to Stripe-hosted card form. Stripe returns user to bare dashboard URL afterwards.
+      window.location.href = res.data.setup_url;
+    })
+    .catch(function(err) {
+      console.warn('[planuri] start-trial-conversion threw:', err);
+      // Re-enable buttons so the user can try again.
+      for (var j = 0; j < allBtns.length; j++) { allBtns[j].disabled = false; }
+      if (btn) { btn.textContent = 'Alege'; }
+      showState('error');
+    });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════════════════════════════
+(function boot() {
+  pendingToken = new URLSearchParams(window.location.search).get('token');
+
+  document.getElementById('goto-dashboard-btn').onclick = function() {
+    window.location.href = DASHBOARD_URL;
+  };
+  document.getElementById('retry-btn').onclick = function() {
+    loadContext();
+  };
+
+  loadContext();
+})();
+</script>
+
+</body>
+</html>
