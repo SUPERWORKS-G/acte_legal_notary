@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <!--
-  acte.legal — Trial conversion page (planuri_v03) · 2026-06-11
+  acte.legal — Trial conversion page (planuri_v04) · 2026-06-11
+  ───────────────────────────────────────────────────────────────
+  v03 → v04 changelog (Master, register audit — casual-form alignment):
+
+    Copy-only patch, 6 string swaps. Full B2B register audit found
+    the email canon is casual (tu-form: "Activează-ți contul",
+    "Alege planul"); this page was the deviation, mixing polite
+    headings with casual buttons. All polite forms swapped:
+      <title>  'Alegeți un plan'        -> 'Alege un plan'
+      heading  'Alegeți un plan.'       -> 'Alege un plan.'
+      helper   'Întrebări? Scrieți la'  -> 'Întrebări? Scrie la'
+      helper   'Pentru un link nou, scrieți la' -> '... scrie la'
+      helper   'Vă rugăm să reîncercați.' -> 'Te rugăm să reîncerci.'
+      helper   'Scrieți la'             -> 'Scrie la'
+    Touched: 6 static strings. Untouched: ALL CSS, JS, state
+    machine, EF calls, error mapping, tokens, v03 mobile block.
+    Rollback target: planuri_v03.html (sha256 c5456575...).
+  ───────────────────────────────────────────────────────────────
+  (v03 header retained below for lineage:)
   ───────────────────────────────────────────────────────────────
   v02 → v03 changelog (George 2026-06-11 — mobile differentiation + copy + price format):
 
@@ -92,7 +110,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>acte.legal — Alegeți un plan</title>
+<title>acte.legal — Alege un plan</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
@@ -168,14 +186,14 @@
     <div class="auth-form-lbl" id="office-name"></div>
     <div class="page-heading">
       <div class="auth-title" id="trial-end-line"></div>
-      <div class="auth-title">Alegeți un plan.</div>
+      <div class="auth-title">Alege un plan.</div>
     </div>
   </div>
   <div class="plans-row" id="plans-row">
     <!-- 3 plan cards injected by JS -->
   </div>
   <div class="page-footer">
-    <div class="auth-helper">Întrebări? Scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+    <div class="auth-helper">Întrebări? Scrie la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
   </div>
 </div>
 
@@ -186,7 +204,7 @@
     <div class="page-heading">
       <div class="auth-title">Linkul a expirat.</div>
     </div>
-    <div class="auth-helper">Pentru un link nou, scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+    <div class="auth-helper">Pentru un link nou, scrie la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
   </div>
 </div>
 
@@ -211,13 +229,13 @@
     <div class="page-heading">
       <div class="auth-title">A apărut o eroare.</div>
     </div>
-    <div class="auth-helper">Vă rugăm să reîncercați.</div>
+    <div class="auth-helper">Te rugăm să reîncerci.</div>
   </div>
   <div class="action-block">
     <button class="auth-btn-primary" id="retry-btn">Reîncearcă</button>
     <div class="action-contact">
       <div class="auth-helper">Persistă problema?</div>
-      <div class="auth-helper">Scrieți la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
+      <div class="auth-helper">Scrie la <a class="auth-helper-link" href="mailto:contact@acte.legal">contact@acte.legal</a>.</div>
     </div>
   </div>
 </div>
